@@ -1,13 +1,37 @@
+import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from pydantic import EmailStr
-from sqlalchemy import DateTime
+from sqlalchemy import Date, DateTime
 from sqlmodel import Field, Relationship, SQLModel
 
 
 def get_datetime_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class SituationMatrimoniale(str, enum.Enum):
+    celibataire = "celibataire"
+    marie = "marie"
+    divorce = "divorce"
+    veuf = "veuf"
+
+
+class StatutDemande(str, enum.Enum):
+    brouillon = "brouillon"
+    soumise = "soumise"
+    en_etude = "en_etude"
+    validee = "validee"
+    rejectee = "rejetee"
+    signee = "signee"
+
+
+class StatutDocument(str, enum.Enum):
+    pending = "pending"
+    uploaded = "uploaded"
+    processing = "processing"
+    valide = "valide"
 
 
 # Shared properties
@@ -16,6 +40,8 @@ class UserBase(SQLModel):
     phone: str | None = Field(default=None, unique=True, index=True, max_length=20)
     is_active: bool = True
     is_superuser: bool = False
+    is_admin: bool = False
+    is_investisseur: bool = False
     full_name: str | None = Field(default=None, max_length=255)
 
 
@@ -57,6 +83,9 @@ class User(UserBase, table=True):
         sa_type=DateTime(timezone=True),  # type: ignore
     )
     items: list["Item"] = Relationship(back_populates="owner", cascade_delete=True)
+    demandes: list["Demande"] = Relationship(
+        back_populates="owner", cascade_delete=True
+    )
 
 
 # Properties to return via API, id is always required
@@ -67,6 +96,162 @@ class UserPublic(UserBase):
 
 class UsersPublic(SQLModel):
     data: list[UserPublic]
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# Credit application ("Demande") domain models
+# ---------------------------------------------------------------------------
+
+
+class Document(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    type: str = Field(max_length=120)
+    nom: str | None = Field(default=None, max_length=255)
+    statut: StatutDocument = Field(default=StatutDocument.pending)
+    ocr: bool = False
+    demande_id: uuid.UUID = Field(
+        foreign_key="demande.id", nullable=False, ondelete="CASCADE"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    demande: "Demande" = Relationship(back_populates="documents")
+
+
+class Demande(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+
+    # --- Identité du demandeur ---
+    prenom: str = Field(max_length=100)
+    nom: str = Field(max_length=100)
+    date_naissance: date | None = Field(default=None, sa_type=Date)  # type: ignore
+    lieu_naissance: str | None = Field(default=None, max_length=100)
+    cni_number: str | None = Field(default=None, max_length=50)
+    situation_matrimoniale: SituationMatrimoniale | None = Field(default=None)
+    profession: str | None = Field(default=None, max_length=120)
+    employeur: str | None = Field(default=None, max_length=120)
+    revenu_mensuel: int | None = Field(default=None)
+    anciennete_annees: int | None = Field(default=None)
+    adresse: str | None = Field(default=None, max_length=255)
+
+    # --- Véhicule & plan de financement ---
+    marque: str | None = Field(default=None, max_length=50)
+    modele: str | None = Field(default=None, max_length=50)
+    annee: int | None = Field(default=None)
+    kilometrage: int | None = Field(default=None)
+    vendeur: str | None = Field(default=None, max_length=120)
+    prix_vehicule: int = Field(default=0)
+    duree_mois: int = Field(default=48)
+    mensualite: int | None = Field(default=None)
+    taux_teg: float | None = Field(default=22.0)
+
+    # --- Suivi ---
+    statut: StatutDemande = Field(default=StatutDemande.soumise)
+
+    # --- Relations ---
+    owner_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    owner: User | None = Relationship(back_populates="demandes")
+    documents: list[Document] = Relationship(
+        back_populates="demande", cascade_delete=True
+    )
+
+
+# ---------------------------------------------------------------------------
+# Schemas (Pydantic) for Demande / Document
+# ---------------------------------------------------------------------------
+
+
+class DocumentBase(SQLModel):
+    type: str = Field(max_length=120)
+    nom: str | None = Field(default=None, max_length=255)
+    statut: StatutDocument = Field(default=StatutDocument.pending)
+    ocr: bool = False
+
+
+class DocumentCreate(DocumentBase):
+    pass
+
+
+class DocumentPublic(DocumentBase):
+    id: uuid.UUID
+    demande_id: uuid.UUID
+    created_at: datetime | None = None
+
+
+class DocumentsPublic(SQLModel):
+    data: list[DocumentPublic]
+    count: int
+
+
+class DemandeBase(SQLModel):
+    prenom: str = Field(max_length=100)
+    nom: str = Field(max_length=100)
+    date_naissance: date | None = None
+    lieu_naissance: str | None = Field(default=None, max_length=100)
+    cni_number: str | None = Field(default=None, max_length=50)
+    situation_matrimoniale: SituationMatrimoniale | None = None
+    profession: str | None = Field(default=None, max_length=120)
+    employeur: str | None = Field(default=None, max_length=120)
+    revenu_mensuel: int | None = None
+    anciennete_annees: int | None = None
+    adresse: str | None = Field(default=None, max_length=255)
+    marque: str | None = Field(default=None, max_length=50)
+    modele: str | None = Field(default=None, max_length=50)
+    annee: int | None = None
+    kilometrage: int | None = None
+    vendeur: str | None = Field(default=None, max_length=120)
+    prix_vehicule: int = Field(default=0)
+    duree_mois: int = Field(default=48)
+    mensualite: int | None = None
+    taux_teg: float | None = Field(default=22.0)
+    statut: StatutDemande = Field(default=StatutDemande.soumise)
+
+
+class DemandeCreate(DemandeBase):
+    documents: list[DocumentCreate] | None = Field(default_factory=list)
+
+
+class DemandeUpdate(SQLModel):
+    prenom: str | None = Field(default=None, max_length=100)
+    nom: str | None = Field(default=None, max_length=100)
+    date_naissance: date | None = None
+    lieu_naissance: str | None = Field(default=None, max_length=100)
+    cni_number: str | None = Field(default=None, max_length=50)
+    situation_matrimoniale: SituationMatrimoniale | None = None
+    profession: str | None = Field(default=None, max_length=120)
+    employeur: str | None = Field(default=None, max_length=120)
+    revenu_mensuel: int | None = None
+    anciennete_annees: int | None = None
+    adresse: str | None = Field(default=None, max_length=255)
+    marque: str | None = Field(default=None, max_length=50)
+    modele: str | None = Field(default=None, max_length=50)
+    annee: int | None = None
+    kilometrage: int | None = None
+    vendeur: str | None = Field(default=None, max_length=120)
+    prix_vehicule: int | None = None
+    duree_mois: int | None = None
+    mensualite: int | None = None
+    taux_teg: float | None = None
+    statut: StatutDemande | None = None
+
+
+class DemandePublic(DemandeBase):
+    id: uuid.UUID
+    owner_id: uuid.UUID
+    created_at: datetime | None = None
+    documents: list[DocumentPublic] = Field(default_factory=list)
+
+
+class DemandesPublic(SQLModel):
+    data: list[DemandePublic]
     count: int
 
 
