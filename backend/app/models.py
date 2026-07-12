@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from pydantic import EmailStr
-from sqlalchemy import Date, DateTime
+from sqlalchemy import Date, DateTime, LargeBinary
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -110,6 +110,8 @@ class Document(SQLModel, table=True):
     nom: str | None = Field(default=None, max_length=255)
     statut: StatutDocument = Field(default=StatutDocument.pending)
     ocr: bool = False
+    content_type: str | None = Field(default=None, max_length=100)
+    fichier: bytes | None = Field(default=None, sa_type=LargeBinary)
     demande_id: uuid.UUID = Field(
         foreign_key="demande.id", nullable=False, ondelete="CASCADE"
     )

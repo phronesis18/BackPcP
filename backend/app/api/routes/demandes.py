@@ -1,7 +1,8 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -12,7 +13,9 @@ from app.models import (
     DemandePublic,
     DemandeUpdate,
     DemandesPublic,
+    Document,
     Message,
+    StatutDocument,
 )
 
 router = APIRouter(prefix="/demandes", tags=["demandes"])
@@ -63,6 +66,66 @@ def create_demande_route(
     """
     return create_demande(
         session=session, demande_in=demande_in, owner_id=current_user.id
+    )
+
+
+@router.post("/{demande_id}/documents/{document_id}/upload")
+async def upload_document(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    demande_id: uuid.UUID,
+    document_id: uuid.UUID,
+    file: UploadFile = File(...),
+) -> Any:
+    """
+    Upload the file for a specific document of a demande.
+    """
+    demande = get_demande(session=session, demande_id=demande_id)
+    if not demande:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if not current_user.is_superuser and demande.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+
+    document = session.get(Document, document_id)
+    if not document or document.demande_id != demande_id:
+        raise HTTPException(status_code=404, detail="Document introuvable")
+
+    document.fichier = await file.read()
+    document.content_type = file.content_type
+    document.nom = file.filename
+    document.statut = StatutDocument.uploaded
+    session.add(document)
+    session.commit()
+    session.refresh(document)
+    return DemandePublic.model_validate(demande)
+
+
+@router.get("/{demande_id}/documents/{document_id}/download")
+def download_document(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    demande_id: uuid.UUID,
+    document_id: uuid.UUID,
+) -> Response:
+    """
+    Download the file of a specific document of a demande.
+    """
+    demande = get_demande(session=session, demande_id=demande_id)
+    if not demande:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if not current_user.is_superuser and demande.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+
+    document = session.get(Document, document_id)
+    if not document or document.demande_id != demande_id or not document.fichier:
+        raise HTTPException(status_code=404, detail="Document introuvable")
+
+    return Response(
+        content=document.fichier,
+        media_type=document.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{document.nom}"'},
     )
 
 
