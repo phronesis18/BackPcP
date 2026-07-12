@@ -12,7 +12,7 @@ docker compose watch
 
 Backend, JSON based web API based on OpenAPI: <http://localhost:8000>
 
-Automatic interactive documentation with Swagger UI (from the OpenAPI backend): <http://localhost:8000/docs>
+Automatic interactive documentation with Swagger UI (from the OpenAPI backend): <http://localhost:8080/docs>
 
 Adminer, database web administration: <http://localhost:8080>
 
@@ -172,9 +172,9 @@ Development URLs, for local development.
 
 Backend: <http://localhost:8000>
 
-Automatic Interactive Docs (Swagger UI): <http://localhost:8000/docs>
+Automatic Interactive Docs (Swagger UI): <http://localhost:8080/docs>
 
-Automatic Alternative Docs (ReDoc): <http://localhost:8000/redoc>
+Automatic Alternative Docs (ReDoc): <http://localhost:8080/redoc>
 
 Adminer: <http://localhost:8080>
 

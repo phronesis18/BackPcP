@@ -319,8 +319,14 @@ def test_update_password_me_same_password_error(
 def test_register_user(client: TestClient, db: Session) -> None:
     username = random_email()
     password = random_lower_string()
-    full_name = random_lower_string()
-    data = {"email": username, "password": password, "full_name": full_name}
+    phone = "+22997123456"
+    data = {
+        "first_name": "Jean",
+        "last_name": "Dossou",
+        "phone": phone,
+        "email": username,
+        "password": password,
+    }
     r = client.post(
         f"{settings.API_V1_STR}/users/signup",
         json=data,
@@ -328,31 +334,34 @@ def test_register_user(client: TestClient, db: Session) -> None:
     assert r.status_code == 200
     created_user = r.json()
     assert created_user["email"] == username
-    assert created_user["full_name"] == full_name
+    assert created_user["full_name"] == "Jean Dossou"
+    assert created_user["phone"] == phone
 
     user_query = select(User).where(User.email == username)
     user_db = db.exec(user_query).first()
     assert user_db
     assert user_db.email == username
-    assert user_db.full_name == full_name
+    assert user_db.full_name == "Jean Dossou"
+    assert user_db.phone == phone
     verified, _ = verify_password(password, user_db.hashed_password)
     assert verified
 
 
 def test_register_user_already_exists_error(client: TestClient) -> None:
     password = random_lower_string()
-    full_name = random_lower_string()
     data = {
+        "first_name": "Jean",
+        "last_name": "Dossou",
+        "phone": "+22997123456",
         "email": settings.FIRST_SUPERUSER,
         "password": password,
-        "full_name": full_name,
     }
     r = client.post(
         f"{settings.API_V1_STR}/users/signup",
         json=data,
     )
     assert r.status_code == 400
-    assert r.json()["detail"] == "The user with this email already exists in the system"
+    assert r.json()["detail"] == "Un utilisateur avec cet email existe déjà."
 
 
 def test_update_user(
