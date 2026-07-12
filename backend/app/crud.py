@@ -1,10 +1,19 @@
 import uuid
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, func, select
 
 from app.core.security import get_password_hash, verify_password
-from app.models import Item, ItemCreate, User, UserCreate, UserUpdate
+from app.models import (
+    Demande,
+    DemandeCreate,
+    Document,
+    Item,
+    ItemCreate,
+    User,
+    UserCreate,
+    UserUpdate,
+)
 
 
 def create_user(*, session: Session, user_create: UserCreate) -> User:
@@ -33,6 +42,12 @@ def update_user(*, session: Session, db_user: User, user_in: UserUpdate) -> Any:
 
 def get_user_by_email(*, session: Session, email: str) -> User | None:
     statement = select(User).where(User.email == email)
+    session_user = session.exec(statement).first()
+    return session_user
+
+
+def get_user_by_phone(*, session: Session, phone: str) -> User | None:
+    statement = select(User).where(User.phone == phone)
     session_user = session.exec(statement).first()
     return session_user
 
@@ -66,3 +81,45 @@ def create_item(*, session: Session, item_in: ItemCreate, owner_id: uuid.UUID) -
     session.commit()
     session.refresh(db_item)
     return db_item
+
+
+def create_demande(
+    *, session: Session, demande_in: DemandeCreate, owner_id: uuid.UUID
+) -> Demande:
+    demande_data = demande_in.model_dump(exclude={"documents"})
+    demande = Demande.model_validate(demande_data, update={"owner_id": owner_id})
+    session.add(demande)
+    session.commit()
+    session.refresh(demande)
+
+    for doc_in in demande_in.documents or []:
+        document = Document.model_validate(doc_in, update={"demande_id": demande.id})
+        session.add(document)
+    if demande_in.documents:
+        session.commit()
+        session.refresh(demande)
+    return demande
+
+
+def get_demandes(
+    *, session: Session, owner_id: uuid.UUID | None = None, skip: int = 0, limit: int = 100
+) -> tuple[list[Demande], int]:
+    statement = select(Demande)
+    count_statement = select(func.count()).select_from(Demande)
+    if owner_id is not None:
+        statement = statement.where(Demande.owner_id == owner_id)
+        count_statement = count_statement.where(Demande.owner_id == owner_id)
+
+    count = session.exec(count_statement).one()
+    demandes = (
+        session.exec(
+            statement.order_by(col(Demande.created_at).desc())
+            .offset(skip)
+            .limit(limit)
+        ).all()
+    )
+    return list(demandes), count
+
+
+def get_demande(*, session: Session, demande_id: uuid.UUID) -> Demande | None:
+    return session.get(Demande, demande_id)

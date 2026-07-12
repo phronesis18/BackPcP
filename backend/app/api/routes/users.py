@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Any
 
@@ -148,13 +149,37 @@ def register_user(session: SessionDep, user_in: UserRegister) -> Any:
     """
     Create new user without the need to be logged in.
     """
-    user = crud.get_user_by_email(session=session, email=user_in.email)
+    existing_phone = crud.get_user_by_phone(session=session, phone=user_in.phone)
+    if existing_phone:
+        raise HTTPException(
+            status_code=400,
+            detail="Un utilisateur avec ce numéro de téléphone existe déjà.",
+        )
+
+    email = user_in.email
+    if not email:
+        digits = re.sub(r"\D", "", user_in.phone)
+        if not digits:
+            raise HTTPException(
+                status_code=400,
+                detail="Numéro de téléphone invalide.",
+            )
+        email = f"{digits}@pcp.phronesis.com"
+
+    user = crud.get_user_by_email(session=session, email=email)
     if user:
         raise HTTPException(
             status_code=400,
-            detail="The user with this email already exists in the system",
+            detail="Un utilisateur avec cet email existe déjà.",
         )
-    user_create = UserCreate.model_validate(user_in)
+
+    full_name = f"{user_in.first_name} {user_in.last_name}".strip()
+    user_create = UserCreate(
+        email=email,
+        password=user_in.password,
+        full_name=full_name,
+        phone=user_in.phone,
+    )
     user = crud.create_user(session=session, user_create=user_create)
     return user
 
