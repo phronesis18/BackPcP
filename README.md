@@ -68,8 +68,8 @@ Cette commande démarre la base de données, applique les migrations, crée le s
 
 | Service | URL |
 |---|---|
-| API (Swagger UI) | http://localhost:8080/docs |
-| API (ReDoc) | http://localhost:8080/redoc |
+| API (Swagger UI) | http://localhost:8000/docs |
+| API (ReDoc) | http://localhost:8000/redoc |
 | Adminer (base de données) | http://localhost:8080 |
 | Mailcatcher (emails) | http://localhost:1080 |
 
