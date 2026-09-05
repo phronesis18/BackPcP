@@ -8,6 +8,15 @@ from app.models import (
     Demande,
     DemandeCreate,
     Document,
+    Marque,
+    MarqueCreate,
+    MarqueUpdate,
+    Modele,
+    ModeleAnnee,
+    ModeleAnneeCreate,
+    ModeleAnneeUpdate,
+    ModeleCreate,
+    ModeleUpdate,
     User,
     UserCreate,
     UserUpdate,
@@ -114,3 +123,121 @@ def get_demandes(
 
 def get_demande(*, session: Session, demande_id: uuid.UUID) -> Demande | None:
     return session.get(Demande, demande_id)
+
+
+# ---------------------------------------------------------------------------
+# Catalogue véhicules (Marque -> Modele -> ModeleAnnee)
+# ---------------------------------------------------------------------------
+
+
+def get_marques(*, session: Session) -> tuple[list[Marque], int]:
+    statement = select(Marque).order_by(col(Marque.nom))
+    marques = session.exec(statement).all()
+    count = session.exec(select(func.count()).select_from(Marque)).one()
+    return list(marques), count
+
+
+def get_marque_by_nom(*, session: Session, nom: str) -> Marque | None:
+    statement = select(Marque).where(func.lower(Marque.nom) == nom.lower())
+    return session.exec(statement).first()
+
+
+def create_marque(*, session: Session, marque_in: MarqueCreate) -> Marque:
+    marque = Marque.model_validate(marque_in)
+    session.add(marque)
+    session.commit()
+    session.refresh(marque)
+    return marque
+
+
+def update_marque(*, session: Session, db_marque: Marque, marque_in: MarqueUpdate) -> Marque:
+    marque_data = marque_in.model_dump(exclude_unset=True)
+    db_marque.sqlmodel_update(marque_data)
+    session.add(db_marque)
+    session.commit()
+    session.refresh(db_marque)
+    return db_marque
+
+
+def get_modeles(*, session: Session, marque_id: uuid.UUID) -> tuple[list[Modele], int]:
+    statement = (
+        select(Modele).where(Modele.marque_id == marque_id).order_by(col(Modele.nom))
+    )
+    modeles = session.exec(statement).all()
+    count_statement = select(func.count()).select_from(Modele).where(
+        Modele.marque_id == marque_id
+    )
+    count = session.exec(count_statement).one()
+    return list(modeles), count
+
+
+def get_modele_by_nom(
+    *, session: Session, marque_id: uuid.UUID, nom: str
+) -> Modele | None:
+    statement = select(Modele).where(
+        Modele.marque_id == marque_id, func.lower(Modele.nom) == nom.lower()
+    )
+    return session.exec(statement).first()
+
+
+def create_modele(*, session: Session, modele_in: ModeleCreate) -> Modele:
+    modele = Modele.model_validate(modele_in)
+    session.add(modele)
+    session.commit()
+    session.refresh(modele)
+    return modele
+
+
+def update_modele(*, session: Session, db_modele: Modele, modele_in: ModeleUpdate) -> Modele:
+    modele_data = modele_in.model_dump(exclude_unset=True)
+    db_modele.sqlmodel_update(modele_data)
+    session.add(db_modele)
+    session.commit()
+    session.refresh(db_modele)
+    return db_modele
+
+
+def get_modele_annees(
+    *, session: Session, modele_id: uuid.UUID
+) -> tuple[list[ModeleAnnee], int]:
+    statement = (
+        select(ModeleAnnee)
+        .where(ModeleAnnee.modele_id == modele_id)
+        .order_by(col(ModeleAnnee.annee).desc())
+    )
+    annees = session.exec(statement).all()
+    count_statement = select(func.count()).select_from(ModeleAnnee).where(
+        ModeleAnnee.modele_id == modele_id
+    )
+    count = session.exec(count_statement).one()
+    return list(annees), count
+
+
+def get_modele_annee_by_annee(
+    *, session: Session, modele_id: uuid.UUID, annee: int
+) -> ModeleAnnee | None:
+    statement = select(ModeleAnnee).where(
+        ModeleAnnee.modele_id == modele_id, ModeleAnnee.annee == annee
+    )
+    return session.exec(statement).first()
+
+
+def create_modele_annee(
+    *, session: Session, annee_in: ModeleAnneeCreate
+) -> ModeleAnnee:
+    annee = ModeleAnnee.model_validate(annee_in)
+    session.add(annee)
+    session.commit()
+    session.refresh(annee)
+    return annee
+
+
+def update_modele_annee(
+    *, session: Session, db_annee: ModeleAnnee, annee_in: ModeleAnneeUpdate
+) -> ModeleAnnee:
+    annee_data = annee_in.model_dump(exclude_unset=True)
+    db_annee.sqlmodel_update(annee_data)
+    session.add(db_annee)
+    session.commit()
+    session.refresh(db_annee)
+    return db_annee

@@ -166,6 +166,123 @@ class Demande(SQLModel, table=True):
 
 
 # ---------------------------------------------------------------------------
+# Catalogue véhicules (Marque -> Modele -> ModeleAnnee)
+# ---------------------------------------------------------------------------
+
+
+class MarqueBase(SQLModel):
+    nom: str = Field(max_length=80, unique=True, index=True)
+
+
+class MarqueCreate(MarqueBase):
+    pass
+
+
+class MarqueUpdate(SQLModel):
+    nom: str | None = Field(default=None, max_length=80)
+
+
+class Marque(MarqueBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    modeles: list["Modele"] = Relationship(
+        back_populates="marque", cascade_delete=True
+    )
+
+
+class MarquePublic(MarqueBase):
+    id: uuid.UUID
+    created_at: datetime | None = None
+
+
+class MarquesPublic(SQLModel):
+    data: list[MarquePublic]
+    count: int
+
+
+class ModeleBase(SQLModel):
+    nom: str = Field(max_length=80)
+
+
+class ModeleCreate(ModeleBase):
+    marque_id: uuid.UUID
+
+
+class ModeleUpdate(SQLModel):
+    nom: str | None = Field(default=None, max_length=80)
+
+
+class Modele(ModeleBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    marque_id: uuid.UUID = Field(
+        foreign_key="marque.id", nullable=False, ondelete="CASCADE"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    marque: Marque | None = Relationship(back_populates="modeles")
+    annees: list["ModeleAnnee"] = Relationship(
+        back_populates="modele", cascade_delete=True
+    )
+
+
+class ModelePublic(ModeleBase):
+    id: uuid.UUID
+    marque_id: uuid.UUID
+    created_at: datetime | None = None
+
+
+class ModelesPublic(SQLModel):
+    data: list[ModelePublic]
+    count: int
+
+
+class ModeleAnneeBase(SQLModel):
+    annee: int
+    kilometrage_min: int | None = None
+    kilometrage_max: int | None = None
+
+
+class ModeleAnneeCreate(ModeleAnneeBase):
+    modele_id: uuid.UUID
+
+
+class ModeleAnneeUpdate(SQLModel):
+    annee: int | None = None
+    kilometrage_min: int | None = None
+    kilometrage_max: int | None = None
+
+
+class ModeleAnnee(ModeleAnneeBase, table=True):
+    __tablename__ = "modele_annee"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    modele_id: uuid.UUID = Field(
+        foreign_key="modele.id", nullable=False, ondelete="CASCADE"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    modele: Modele | None = Relationship(back_populates="annees")
+
+
+class ModeleAnneePublic(ModeleAnneeBase):
+    id: uuid.UUID
+    modele_id: uuid.UUID
+    created_at: datetime | None = None
+
+
+class ModeleAnneesPublic(SQLModel):
+    data: list[ModeleAnneePublic]
+    count: int
+
+
+# ---------------------------------------------------------------------------
 # Schemas (Pydantic) for Demande / Document
 # ---------------------------------------------------------------------------
 
