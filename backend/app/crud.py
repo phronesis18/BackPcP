@@ -20,6 +20,9 @@ from app.models import (
     User,
     UserCreate,
     UserUpdate,
+    Vendeur,
+    VendeurCreate,
+    VendeurUpdate,
 )
 
 
@@ -241,3 +244,34 @@ def update_modele_annee(
     session.commit()
     session.refresh(db_annee)
     return db_annee
+
+
+def get_vendeurs(*, session: Session) -> tuple[list[Vendeur], int]:
+    statement = select(Vendeur).order_by(col(Vendeur.nom))
+    vendeurs = session.exec(statement).all()
+    count = session.exec(select(func.count()).select_from(Vendeur)).one()
+    return list(vendeurs), count
+
+
+def get_vendeur_by_nom(*, session: Session, nom: str) -> Vendeur | None:
+    statement = select(Vendeur).where(func.lower(Vendeur.nom) == nom.lower())
+    return session.exec(statement).first()
+
+
+def create_vendeur(*, session: Session, vendeur_in: VendeurCreate) -> Vendeur:
+    vendeur = Vendeur.model_validate(vendeur_in)
+    session.add(vendeur)
+    session.commit()
+    session.refresh(vendeur)
+    return vendeur
+
+
+def update_vendeur(
+    *, session: Session, db_vendeur: Vendeur, vendeur_in: VendeurUpdate
+) -> Vendeur:
+    vendeur_data = vendeur_in.model_dump(exclude_unset=True)
+    db_vendeur.sqlmodel_update(vendeur_data)
+    session.add(db_vendeur)
+    session.commit()
+    session.refresh(db_vendeur)
+    return db_vendeur

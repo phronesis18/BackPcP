@@ -282,6 +282,36 @@ class ModeleAnneesPublic(SQLModel):
     count: int
 
 
+class VendeurBase(SQLModel):
+    nom: str = Field(max_length=120, unique=True, index=True)
+
+
+class VendeurCreate(VendeurBase):
+    pass
+
+
+class VendeurUpdate(SQLModel):
+    nom: str | None = Field(default=None, max_length=120)
+
+
+class Vendeur(VendeurBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class VendeurPublic(VendeurBase):
+    id: uuid.UUID
+    created_at: datetime | None = None
+
+
+class VendeursPublic(SQLModel):
+    data: list[VendeurPublic]
+    count: int
+
+
 # ---------------------------------------------------------------------------
 # Schemas (Pydantic) for Demande / Document
 # ---------------------------------------------------------------------------

@@ -22,6 +22,11 @@ from app.models import (
     ModelePublic,
     ModelesPublic,
     ModeleUpdate,
+    Vendeur,
+    VendeurCreate,
+    VendeurPublic,
+    VendeursPublic,
+    VendeurUpdate,
 )
 
 router = APIRouter(prefix="/catalogue", tags=["catalogue"])
@@ -210,3 +215,55 @@ def delete_modele_annee(
     session.delete(annee)
     session.commit()
     return Message(message="Année supprimée avec succès")
+
+
+# --- Vendeurs ----------------------------------------------------------------
+
+
+@router.get("/vendeurs", response_model=VendeursPublic)
+def read_vendeurs(session: SessionDep) -> Any:
+    vendeurs, count = crud.get_vendeurs(session=session)
+    return VendeursPublic(data=vendeurs, count=count)
+
+
+@router.post("/vendeurs", response_model=VendeurPublic)
+def create_vendeur(
+    *, session: SessionDep, current_user: CurrentUser, vendeur_in: VendeurCreate
+) -> Any:
+    _require_admin(current_user)
+    existing = crud.get_vendeur_by_nom(session=session, nom=vendeur_in.nom)
+    if existing:
+        raise HTTPException(status_code=400, detail="Ce vendeur existe déjà.")
+    return crud.create_vendeur(session=session, vendeur_in=vendeur_in)
+
+
+@router.patch("/vendeurs/{vendeur_id}", response_model=VendeurPublic)
+def update_vendeur(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    vendeur_id: uuid.UUID,
+    vendeur_in: VendeurUpdate,
+) -> Any:
+    _require_admin(current_user)
+    db_vendeur = session.get(Vendeur, vendeur_id)
+    if not db_vendeur:
+        raise HTTPException(status_code=404, detail="Vendeur introuvable.")
+    if vendeur_in.nom:
+        existing = crud.get_vendeur_by_nom(session=session, nom=vendeur_in.nom)
+        if existing and existing.id != vendeur_id:
+            raise HTTPException(status_code=400, detail="Ce vendeur existe déjà.")
+    return crud.update_vendeur(session=session, db_vendeur=db_vendeur, vendeur_in=vendeur_in)
+
+
+@router.delete("/vendeurs/{vendeur_id}", response_model=Message)
+def delete_vendeur(
+    session: SessionDep, current_user: CurrentUser, vendeur_id: uuid.UUID
+) -> Any:
+    _require_admin(current_user)
+    vendeur = session.get(Vendeur, vendeur_id)
+    if not vendeur:
+        raise HTTPException(status_code=404, detail="Vendeur introuvable.")
+    session.delete(vendeur)
+    session.commit()
+    return Message(message="Vendeur supprimé avec succès")
