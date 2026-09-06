@@ -3,10 +3,16 @@ from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
-from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.crud import create_demande, create_demande_document, get_demande, get_demandes
+from app.crud import (
+    create_contrat,
+    create_demande,
+    create_demande_document,
+    get_contrat,
+    get_demande,
+    get_demandes,
+)
 from app.models import (
     ContratCreate,
     ContratPublic,
@@ -91,6 +97,7 @@ def create_demande_route(
     demande = create_demande(
         session=session, demande_in=demande_in, owner_id=current_user.id
     )
+    return to_demande_public(demande)
 
 
 @router.post("/{demande_id}/documents", response_model=DocumentPublic, status_code=201)
@@ -107,7 +114,10 @@ def create_document_route(
     demande = get_demande(session=session, demande_id=demande_id)
     if not demande:
         raise HTTPException(status_code=404, detail="Demande introuvable")
-    if not current_user.is_superuser and demande.owner_id != current_user.id:
+    if (
+        not (current_user.is_superuser or current_user.is_admin)
+        and demande.owner_id != current_user.id
+    ):
         raise HTTPException(status_code=403, detail="Accès non autorisé")
     return create_demande_document(session=session, demande_id=demande_id, doc_in=doc_in)
 
