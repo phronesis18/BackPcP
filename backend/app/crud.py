@@ -155,6 +155,10 @@ def create_contrat(
 ) -> Contrat:
     contrat = Contrat(demande_id=demande_id, **contrat_in.model_dump())
     session.add(contrat)
+    demande = session.get(Demande, demande_id)
+    if demande:
+        demande.statut = StatutDemande.signee
+        session.add(demande)
     session.commit()
     session.refresh(contrat)
     return contrat
