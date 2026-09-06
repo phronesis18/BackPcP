@@ -460,6 +460,7 @@ class DemandePublic(DemandeBase):
     created_at: datetime | None = None
     documents: list[DocumentPublic] = Field(default_factory=list)
     score: ScorePublic = Field(default_factory=ScorePublic)
+    unread_count: int = 0
 
 
 class DemandesPublic(SQLModel):
@@ -495,6 +496,52 @@ class ContratPublic(SQLModel):
     contenu: str
     signature: str
     signed_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Messagerie temps réel par dossier (admin <-> client)
+# ---------------------------------------------------------------------------
+
+
+class ChatMessageBase(SQLModel):
+    contenu: str = Field(max_length=2000)
+
+
+class ChatMessageCreate(ChatMessageBase):
+    pass
+
+
+class ChatMessage(ChatMessageBase, table=True):
+    __tablename__ = "message"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    demande_id: uuid.UUID = Field(
+        foreign_key="demande.id", nullable=False, ondelete="CASCADE"
+    )
+    sender_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    sender_role: str = Field(max_length=10)  # snapshot "client" | "admin"
+    lu_par_client: bool = Field(default=False)
+    lu_par_admin: bool = Field(default=False)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class ChatMessagePublic(ChatMessageBase):
+    id: uuid.UUID
+    demande_id: uuid.UUID
+    sender_id: uuid.UUID
+    sender_role: str
+    sender_name: str
+    created_at: datetime | None = None
+
+
+class ChatMessagesPublic(SQLModel):
+    data: list[ChatMessagePublic]
+    count: int
 
 
 # Generic message

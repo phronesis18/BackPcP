@@ -5,6 +5,8 @@ from sqlmodel import Session, col, func, select
 
 from app.core.security import get_password_hash, verify_password
 from app.models import (
+    ChatMessage,
+    ChatMessageCreate,
     Contrat,
     ContratCreate,
     Demande,
@@ -349,3 +351,73 @@ def update_parametres_financiers(
     session.commit()
     session.refresh(db_parametres)
     return db_parametres
+
+
+# ---------------------------------------------------------------------------
+# Messagerie temps réel par dossier
+# ---------------------------------------------------------------------------
+
+
+def create_message(
+    *,
+    session: Session,
+    demande_id: uuid.UUID,
+    sender: User,
+    is_admin_sender: bool,
+    message_in: ChatMessageCreate,
+) -> ChatMessage:
+    message = ChatMessage(
+        demande_id=demande_id,
+        sender_id=sender.id,
+        sender_role="admin" if is_admin_sender else "client",
+        contenu=message_in.contenu,
+        lu_par_admin=is_admin_sender,
+        lu_par_client=not is_admin_sender,
+    )
+    session.add(message)
+    session.commit()
+    session.refresh(message)
+    return message
+
+
+def get_messages(*, session: Session, demande_id: uuid.UUID) -> tuple[list[ChatMessage], int]:
+    statement = (
+        select(ChatMessage)
+        .where(ChatMessage.demande_id == demande_id)
+        .order_by(col(ChatMessage.created_at))
+    )
+    messages = session.exec(statement).all()
+    count = session.exec(
+        select(func.count())
+        .select_from(ChatMessage)
+        .where(ChatMessage.demande_id == demande_id)
+    ).one()
+    return list(messages), count
+
+
+def mark_messages_read(
+    *, session: Session, demande_id: uuid.UUID, is_admin_viewer: bool
+) -> None:
+    field = ChatMessage.lu_par_admin if is_admin_viewer else ChatMessage.lu_par_client
+    statement = select(ChatMessage).where(
+        ChatMessage.demande_id == demande_id, field == False  # noqa: E712
+    )
+    for message in session.exec(statement).all():
+        if is_admin_viewer:
+            message.lu_par_admin = True
+        else:
+            message.lu_par_client = True
+        session.add(message)
+    session.commit()
+
+
+def count_unread_messages(
+    *, session: Session, demande_id: uuid.UUID, is_admin_viewer: bool
+) -> int:
+    field = ChatMessage.lu_par_admin if is_admin_viewer else ChatMessage.lu_par_client
+    statement = (
+        select(func.count())
+        .select_from(ChatMessage)
+        .where(ChatMessage.demande_id == demande_id, field == False)  # noqa: E712
+    )
+    return session.exec(statement).one()

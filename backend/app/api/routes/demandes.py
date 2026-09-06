@@ -3,9 +3,11 @@ from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
+from sqlmodel import Session
 
 from app.api.deps import CurrentUser, SessionDep
 from app.crud import (
+    count_unread_messages,
     create_contrat,
     create_demande,
     create_demande_document,
@@ -27,18 +29,23 @@ from app.models import (
     Message,
     StatutDemande,
     StatutDocument,
+    User,
 )
 from app.scoring import compute_score
 
 router = APIRouter(prefix="/demandes", tags=["demandes"])
 
 
-def to_demande_public(demande: Demande) -> DemandePublic:
+def to_demande_public(session: Session, demande: Demande, viewer: User) -> DemandePublic:
     public = DemandePublic.model_validate(demande)
     public.score = compute_score(demande)
     if demande.owner:
         public.owner_phone = demande.owner.phone
         public.owner_email = demande.owner.email
+    is_admin_viewer = viewer.is_superuser or viewer.is_admin
+    public.unread_count = count_unread_messages(
+        session=session, demande_id=demande.id, is_admin_viewer=is_admin_viewer
+    )
     return public
 
 
@@ -62,7 +69,7 @@ def read_demandes(
         session=session, owner_id=owner_id, statut=statut, skip=skip, limit=limit
     )
     return DemandesPublic(
-        data=[to_demande_public(d) for d in demandes], count=count
+        data=[to_demande_public(session, d, current_user) for d in demandes], count=count
     )
 
 
@@ -81,7 +88,7 @@ def read_demande(
         and demande.owner_id != current_user.id
     ):
         raise HTTPException(status_code=403, detail="Accès non autorisé")
-    return to_demande_public(demande)
+    return to_demande_public(session, demande, current_user)
 
 
 @router.post("/", response_model=DemandePublic, status_code=201)
@@ -97,7 +104,7 @@ def create_demande_route(
     demande = create_demande(
         session=session, demande_in=demande_in, owner_id=current_user.id
     )
-    return to_demande_public(demande)
+    return to_demande_public(session, demande, current_user)
 
 
 @router.post("/{demande_id}/documents", response_model=DocumentPublic, status_code=201)
@@ -154,7 +161,7 @@ async def upload_document(
     session.add(document)
     session.commit()
     session.refresh(document)
-    return to_demande_public(demande)
+    return to_demande_public(session, demande, current_user)
 
 
 @router.get("/{demande_id}/documents/{document_id}/download")
@@ -213,7 +220,7 @@ def update_demande(
     session.add(demande)
     session.commit()
     session.refresh(demande)
-    return to_demande_public(demande)
+    return to_demande_public(session, demande, current_user)
 
 
 @router.delete("/{demande_id}")
