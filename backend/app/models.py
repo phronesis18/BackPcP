@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from pydantic import EmailStr
-from sqlalchemy import Date, DateTime, LargeBinary
+from sqlalchemy import Date, DateTime, LargeBinary, Text
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -22,6 +22,7 @@ class StatutDemande(str, enum.Enum):
     brouillon = "brouillon"
     soumise = "soumise"
     en_etude = "en_etude"
+    complement_demande = "complement_demande"
     validee = "validee"
     rejectee = "rejetee"
     signee = "signee"
@@ -120,6 +121,10 @@ class Document(SQLModel, table=True):
     )
     demande: "Demande" = Relationship(back_populates="documents")
 
+    @property
+    def has_file(self) -> bool:
+        return self.fichier is not None
+
 
 class Demande(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -165,8 +170,25 @@ class Demande(SQLModel, table=True):
     )
 
 
+class Contrat(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    demande_id: uuid.UUID = Field(
+        foreign_key="demande.id", nullable=False, unique=True, ondelete="CASCADE"
+    )
+    contenu: str = Field(sa_type=Text)
+    signature: str = Field(sa_type=Text)
+    signed_at: datetime = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    created_at: datetime = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
 # ---------------------------------------------------------------------------
-# Schemas (Pydantic) for Demande / Document
+# Schemas (Pydantic) for Demande / Document / Contrat
 # ---------------------------------------------------------------------------
 
 
@@ -185,6 +207,7 @@ class DocumentPublic(DocumentBase):
     id: uuid.UUID
     demande_id: uuid.UUID
     created_at: datetime | None = None
+    has_file: bool = False
 
 
 class DocumentsPublic(SQLModel):
@@ -244,16 +267,59 @@ class DemandeUpdate(SQLModel):
     statut: StatutDemande | None = None
 
 
+class ScoreAxis(SQLModel):
+    key: str
+    label: str
+    valeur: int | None
+    max: int
+    disponible: bool
+
+
+class ScoreSignal(SQLModel):
+    type: str  # "ok" | "warning" | "unavailable"
+    label: str
+
+
+class ScoreSource(SQLModel):
+    label: str
+    disponible: bool
+
+
+class ScorePublic(SQLModel):
+    total: int = 0
+    max: int = 0
+    decision: str = "indetermine"
+    axes: list[ScoreAxis] = Field(default_factory=list)
+    signaux: list[ScoreSignal] = Field(default_factory=list)
+    sources: list[ScoreSource] = Field(default_factory=list)
+
+
 class DemandePublic(DemandeBase):
     id: uuid.UUID
     owner_id: uuid.UUID
+    owner_phone: str | None = None
+    owner_email: str | None = None
     created_at: datetime | None = None
     documents: list[DocumentPublic] = Field(default_factory=list)
+    score: ScorePublic = Field(default_factory=ScorePublic)
 
 
 class DemandesPublic(SQLModel):
     data: list[DemandePublic]
     count: int
+
+
+class ContratCreate(SQLModel):
+    contenu: str
+    signature: str
+
+
+class ContratPublic(SQLModel):
+    id: uuid.UUID
+    demande_id: uuid.UUID
+    contenu: str
+    signature: str
+    signed_at: datetime
 
 
 # Generic message

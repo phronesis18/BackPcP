@@ -6,8 +6,16 @@ from fastapi.responses import Response
 from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.crud import create_demande, get_demande, get_demandes
+from app.crud import (
+    create_contrat,
+    create_demande,
+    get_contrat,
+    get_demande,
+    get_demandes,
+)
 from app.models import (
+    ContratCreate,
+    ContratPublic,
     Demande,
     DemandeCreate,
     DemandePublic,
@@ -15,27 +23,44 @@ from app.models import (
     DemandesPublic,
     Document,
     Message,
+    StatutDemande,
     StatutDocument,
 )
+from app.scoring import compute_score
 
 router = APIRouter(prefix="/demandes", tags=["demandes"])
 
 
+def to_demande_public(demande: Demande) -> DemandePublic:
+    public = DemandePublic.model_validate(demande)
+    public.score = compute_score(demande)
+    if demande.owner:
+        public.owner_phone = demande.owner.phone
+        public.owner_email = demande.owner.email
+    return public
+
+
 @router.get("/", response_model=DemandesPublic)
 def read_demandes(
-    session: SessionDep, current_user: CurrentUser, skip: int = 0, limit: int = 100
+    session: SessionDep,
+    current_user: CurrentUser,
+    statut: StatutDemande | None = None,
+    skip: int = 0,
+    limit: int = 100,
 ) -> Any:
     """
     Retrieve credit applications.
 
-    Regular users see only their own applications, superusers see everything.
+    Regular users see only their own applications, admins/superusers see everything.
+    Optionally filter by statut.
     """
-    owner_id = None if current_user.is_superuser else current_user.id
+    is_back_office = current_user.is_superuser or current_user.is_admin
+    owner_id = None if is_back_office else current_user.id
     demandes, count = get_demandes(
-        session=session, owner_id=owner_id, skip=skip, limit=limit
+        session=session, owner_id=owner_id, statut=statut, skip=skip, limit=limit
     )
     return DemandesPublic(
-        data=[DemandePublic.model_validate(d) for d in demandes], count=count
+        data=[to_demande_public(d) for d in demandes], count=count
     )
 
 
@@ -49,9 +74,12 @@ def read_demande(
     demande = get_demande(session=session, demande_id=demande_id)
     if not demande:
         raise HTTPException(status_code=404, detail="Demande introuvable")
-    if not current_user.is_superuser and demande.owner_id != current_user.id:
+    if (
+        not (current_user.is_superuser or current_user.is_admin)
+        and demande.owner_id != current_user.id
+    ):
         raise HTTPException(status_code=403, detail="Accès non autorisé")
-    return demande
+    return to_demande_public(demande)
 
 
 @router.post("/", response_model=DemandePublic, status_code=201)
@@ -64,9 +92,10 @@ def create_demande_route(
     """
     Create a new credit application for the authenticated user.
     """
-    return create_demande(
+    demande = create_demande(
         session=session, demande_in=demande_in, owner_id=current_user.id
     )
+    return to_demande_public(demande)
 
 
 @router.post("/{demande_id}/documents/{document_id}/upload")
@@ -84,7 +113,10 @@ async def upload_document(
     demande = get_demande(session=session, demande_id=demande_id)
     if not demande:
         raise HTTPException(status_code=404, detail="Demande introuvable")
-    if not current_user.is_superuser and demande.owner_id != current_user.id:
+    if (
+        not (current_user.is_superuser or current_user.is_admin)
+        and demande.owner_id != current_user.id
+    ):
         raise HTTPException(status_code=403, detail="Accès non autorisé")
 
     document = session.get(Document, document_id)
@@ -98,7 +130,7 @@ async def upload_document(
     session.add(document)
     session.commit()
     session.refresh(document)
-    return DemandePublic.model_validate(demande)
+    return to_demande_public(demande)
 
 
 @router.get("/{demande_id}/documents/{document_id}/download")
@@ -115,7 +147,10 @@ def download_document(
     demande = get_demande(session=session, demande_id=demande_id)
     if not demande:
         raise HTTPException(status_code=404, detail="Demande introuvable")
-    if not current_user.is_superuser and demande.owner_id != current_user.id:
+    if (
+        not (current_user.is_superuser or current_user.is_admin)
+        and demande.owner_id != current_user.id
+    ):
         raise HTTPException(status_code=403, detail="Accès non autorisé")
 
     document = session.get(Document, document_id)
@@ -143,7 +178,10 @@ def update_demande(
     demande = get_demande(session=session, demande_id=demande_id)
     if not demande:
         raise HTTPException(status_code=404, detail="Demande introuvable")
-    if not current_user.is_superuser and demande.owner_id != current_user.id:
+    if (
+        not (current_user.is_superuser or current_user.is_admin)
+        and demande.owner_id != current_user.id
+    ):
         raise HTTPException(status_code=403, detail="Accès non autorisé")
 
     update_dict = demande_in.model_dump(exclude_unset=True)
@@ -151,7 +189,7 @@ def update_demande(
     session.add(demande)
     session.commit()
     session.refresh(demande)
-    return demande
+    return to_demande_public(demande)
 
 
 @router.delete("/{demande_id}")
@@ -164,8 +202,60 @@ def delete_demande(
     demande = get_demande(session=session, demande_id=demande_id)
     if not demande:
         raise HTTPException(status_code=404, detail="Demande introuvable")
-    if not current_user.is_superuser and demande.owner_id != current_user.id:
+    if (
+        not (current_user.is_superuser or current_user.is_admin)
+        and demande.owner_id != current_user.id
+    ):
         raise HTTPException(status_code=403, detail="Accès non autorisé")
     session.delete(demande)
     session.commit()
     return Message(message="Demande supprimée avec succès")
+
+
+@router.get("/{demande_id}/contrat", response_model=ContratPublic)
+def read_contrat(
+    session: SessionDep, current_user: CurrentUser, demande_id: uuid.UUID
+) -> Any:
+    """
+    Get the signed contract for a credit application, if it exists.
+    """
+    demande = get_demande(session=session, demande_id=demande_id)
+    if not demande:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if (
+        not (current_user.is_superuser or current_user.is_admin)
+        and demande.owner_id != current_user.id
+    ):
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    contrat = get_contrat(session=session, demande_id=demande_id)
+    if not contrat:
+        raise HTTPException(status_code=404, detail="Contrat introuvable")
+    return contrat
+
+
+@router.post("/{demande_id}/contrat", response_model=ContratPublic, status_code=201)
+def create_contrat_route(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    demande_id: uuid.UUID,
+    contrat_in: ContratCreate,
+) -> Any:
+    """
+    Save the signed contract for a credit application. Only the client who
+    owns the demande (or an admin, for support purposes) can sign it. A
+    demande can only have one contract — once signed, it cannot be replaced
+    through this route.
+    """
+    demande = get_demande(session=session, demande_id=demande_id)
+    if not demande:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if not (
+        current_user.is_superuser
+        or current_user.is_admin
+        or demande.owner_id == current_user.id
+    ):
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    if get_contrat(session=session, demande_id=demande_id):
+        raise HTTPException(status_code=409, detail="Ce dossier a déjà un contrat signé")
+    return create_contrat(session=session, demande_id=demande_id, contrat_in=contrat_in)

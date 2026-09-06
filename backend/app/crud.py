@@ -5,9 +5,12 @@ from sqlmodel import Session, col, func, select
 
 from app.core.security import get_password_hash, verify_password
 from app.models import (
+    Contrat,
+    ContratCreate,
     Demande,
     DemandeCreate,
     Document,
+    StatutDemande,
     User,
     UserCreate,
     UserUpdate,
@@ -93,13 +96,21 @@ def create_demande(
 
 
 def get_demandes(
-    *, session: Session, owner_id: uuid.UUID | None = None, skip: int = 0, limit: int = 100
+    *,
+    session: Session,
+    owner_id: uuid.UUID | None = None,
+    statut: StatutDemande | None = None,
+    skip: int = 0,
+    limit: int = 100,
 ) -> tuple[list[Demande], int]:
     statement = select(Demande)
     count_statement = select(func.count()).select_from(Demande)
     if owner_id is not None:
         statement = statement.where(Demande.owner_id == owner_id)
         count_statement = count_statement.where(Demande.owner_id == owner_id)
+    if statut is not None:
+        statement = statement.where(Demande.statut == statut)
+        count_statement = count_statement.where(Demande.statut == statut)
 
     count = session.exec(count_statement).one()
     demandes = (
@@ -110,6 +121,21 @@ def get_demandes(
         ).all()
     )
     return list(demandes), count
+
+
+def get_contrat(*, session: Session, demande_id: uuid.UUID) -> Contrat | None:
+    statement = select(Contrat).where(Contrat.demande_id == demande_id)
+    return session.exec(statement).first()
+
+
+def create_contrat(
+    *, session: Session, demande_id: uuid.UUID, contrat_in: ContratCreate
+) -> Contrat:
+    contrat = Contrat(demande_id=demande_id, **contrat_in.model_dump())
+    session.add(contrat)
+    session.commit()
+    session.refresh(contrat)
+    return contrat
 
 
 def get_demande(*, session: Session, demande_id: uuid.UUID) -> Demande | None:
