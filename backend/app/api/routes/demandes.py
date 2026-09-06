@@ -6,7 +6,7 @@ from fastapi.responses import Response
 from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.crud import create_demande, get_demande, get_demandes
+from app.crud import create_demande, create_demande_document, get_demande, get_demandes
 from app.models import (
     Demande,
     DemandeCreate,
@@ -14,7 +14,10 @@ from app.models import (
     DemandeUpdate,
     DemandesPublic,
     Document,
+    DocumentCreate,
+    DocumentPublic,
     Message,
+    StatutDemande,
     StatutDocument,
 )
 
@@ -23,16 +26,21 @@ router = APIRouter(prefix="/demandes", tags=["demandes"])
 
 @router.get("/", response_model=DemandesPublic)
 def read_demandes(
-    session: SessionDep, current_user: CurrentUser, skip: int = 0, limit: int = 100
+    session: SessionDep,
+    current_user: CurrentUser,
+    statut: StatutDemande | None = None,
+    skip: int = 0,
+    limit: int = 100,
 ) -> Any:
     """
     Retrieve credit applications.
 
     Regular users see only their own applications, superusers see everything.
+    Brouillons (drafts) are excluded unless `statut=brouillon` is explicitly requested.
     """
     owner_id = None if current_user.is_superuser else current_user.id
     demandes, count = get_demandes(
-        session=session, owner_id=owner_id, skip=skip, limit=limit
+        session=session, owner_id=owner_id, statut=statut, skip=skip, limit=limit
     )
     return DemandesPublic(
         data=[DemandePublic.model_validate(d) for d in demandes], count=count
@@ -67,6 +75,25 @@ def create_demande_route(
     return create_demande(
         session=session, demande_in=demande_in, owner_id=current_user.id
     )
+
+
+@router.post("/{demande_id}/documents", response_model=DocumentPublic, status_code=201)
+def create_document_route(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    demande_id: uuid.UUID,
+    doc_in: DocumentCreate,
+) -> Any:
+    """
+    Add a document (metadata) to an existing credit application.
+    """
+    demande = get_demande(session=session, demande_id=demande_id)
+    if not demande:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if not current_user.is_superuser and demande.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    return create_demande_document(session=session, demande_id=demande_id, doc_in=doc_in)
 
 
 @router.post("/{demande_id}/documents/{document_id}/upload")

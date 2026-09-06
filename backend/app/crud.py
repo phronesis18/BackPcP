@@ -8,6 +8,7 @@ from app.models import (
     Demande,
     DemandeCreate,
     Document,
+    DocumentCreate,
     Marque,
     MarqueCreate,
     MarqueUpdate,
@@ -17,6 +18,7 @@ from app.models import (
     ModeleAnneeUpdate,
     ModeleCreate,
     ModeleUpdate,
+    StatutDemande,
     User,
     UserCreate,
     UserUpdate,
@@ -105,13 +107,27 @@ def create_demande(
 
 
 def get_demandes(
-    *, session: Session, owner_id: uuid.UUID | None = None, skip: int = 0, limit: int = 100
+    *,
+    session: Session,
+    owner_id: uuid.UUID | None = None,
+    statut: StatutDemande | None = None,
+    skip: int = 0,
+    limit: int = 100,
 ) -> tuple[list[Demande], int]:
     statement = select(Demande)
     count_statement = select(func.count()).select_from(Demande)
     if owner_id is not None:
         statement = statement.where(Demande.owner_id == owner_id)
         count_statement = count_statement.where(Demande.owner_id == owner_id)
+    if statut is not None:
+        statement = statement.where(Demande.statut == statut)
+        count_statement = count_statement.where(Demande.statut == statut)
+    else:
+        # Les brouillons ne sont visibles que si on les demande explicitement.
+        statement = statement.where(Demande.statut != StatutDemande.brouillon)
+        count_statement = count_statement.where(
+            Demande.statut != StatutDemande.brouillon
+        )
 
     count = session.exec(count_statement).one()
     demandes = (
@@ -126,6 +142,16 @@ def get_demandes(
 
 def get_demande(*, session: Session, demande_id: uuid.UUID) -> Demande | None:
     return session.get(Demande, demande_id)
+
+
+def create_demande_document(
+    *, session: Session, demande_id: uuid.UUID, doc_in: DocumentCreate
+) -> Document:
+    document = Document.model_validate(doc_in, update={"demande_id": demande_id})
+    session.add(document)
+    session.commit()
+    session.refresh(document)
+    return document
 
 
 # ---------------------------------------------------------------------------
