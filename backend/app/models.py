@@ -467,6 +467,23 @@ class DemandesPublic(SQLModel):
     count: int
 
 
+class Contrat(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    demande_id: uuid.UUID = Field(
+        foreign_key="demande.id", nullable=False, unique=True, ondelete="CASCADE"
+    )
+    contenu: str = Field(sa_type=Text)  # type: ignore
+    signature: str = Field(sa_type=Text)  # type: ignore
+    signed_at: datetime = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    created_at: datetime = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
 class ContratCreate(SQLModel):
     contenu: str
     signature: str
