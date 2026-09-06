@@ -18,6 +18,8 @@ from app.models import (
     ModeleAnneeUpdate,
     ModeleCreate,
     ModeleUpdate,
+    ParametresFinanciers,
+    ParametresFinanciersUpdate,
     StatutDemande,
     User,
     UserCreate,
@@ -25,6 +27,7 @@ from app.models import (
     Vendeur,
     VendeurCreate,
     VendeurUpdate,
+    get_datetime_utc,
 )
 
 
@@ -301,3 +304,27 @@ def update_vendeur(
     session.commit()
     session.refresh(db_vendeur)
     return db_vendeur
+
+
+def get_or_create_parametres_financiers(*, session: Session) -> ParametresFinanciers:
+    parametres = session.exec(select(ParametresFinanciers)).first()
+    if not parametres:
+        parametres = ParametresFinanciers()
+        session.add(parametres)
+        session.commit()
+        session.refresh(parametres)
+    return parametres
+
+
+def update_parametres_financiers(
+    *,
+    session: Session,
+    db_parametres: ParametresFinanciers,
+    parametres_in: ParametresFinanciersUpdate,
+) -> ParametresFinanciers:
+    parametres_data = parametres_in.model_dump(exclude_unset=True)
+    db_parametres.sqlmodel_update(parametres_data, update={"updated_at": get_datetime_utc()})
+    session.add(db_parametres)
+    session.commit()
+    session.refresh(db_parametres)
+    return db_parametres

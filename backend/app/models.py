@@ -313,6 +313,34 @@ class VendeursPublic(SQLModel):
 
 
 # ---------------------------------------------------------------------------
+# Paramètres financiers (TEG, apport) — ligne unique modifiable par l'admin
+# ---------------------------------------------------------------------------
+
+
+class ParametresFinanciersBase(SQLModel):
+    taux_teg_annuel: float = Field(default=22.0)
+    taux_apport: float = Field(default=0.25)
+
+
+class ParametresFinanciersUpdate(SQLModel):
+    taux_teg_annuel: float | None = None
+    taux_apport: float | None = None
+
+
+class ParametresFinanciers(ParametresFinanciersBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    updated_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class ParametresFinanciersPublic(ParametresFinanciersBase):
+    id: uuid.UUID
+    updated_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
 # Schemas (Pydantic) for Demande / Document
 # ---------------------------------------------------------------------------
 
