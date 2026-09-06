@@ -6,13 +6,7 @@ from fastapi.responses import Response
 from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.crud import (
-    create_contrat,
-    create_demande,
-    get_contrat,
-    get_demande,
-    get_demandes,
-)
+from app.crud import create_demande, create_demande_document, get_demande, get_demandes
 from app.models import (
     ContratCreate,
     ContratPublic,
@@ -22,6 +16,8 @@ from app.models import (
     DemandeUpdate,
     DemandesPublic,
     Document,
+    DocumentCreate,
+    DocumentPublic,
     Message,
     StatutDemande,
     StatutDocument,
@@ -51,8 +47,8 @@ def read_demandes(
     """
     Retrieve credit applications.
 
-    Regular users see only their own applications, admins/superusers see everything.
-    Optionally filter by statut.
+    Regular users see only their own applications, superusers see everything.
+    Brouillons (drafts) are excluded unless `statut=brouillon` is explicitly requested.
     """
     is_back_office = current_user.is_superuser or current_user.is_admin
     owner_id = None if is_back_office else current_user.id
@@ -95,7 +91,25 @@ def create_demande_route(
     demande = create_demande(
         session=session, demande_in=demande_in, owner_id=current_user.id
     )
-    return to_demande_public(demande)
+
+
+@router.post("/{demande_id}/documents", response_model=DocumentPublic, status_code=201)
+def create_document_route(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    demande_id: uuid.UUID,
+    doc_in: DocumentCreate,
+) -> Any:
+    """
+    Add a document (metadata) to an existing credit application.
+    """
+    demande = get_demande(session=session, demande_id=demande_id)
+    if not demande:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if not current_user.is_superuser and demande.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    return create_demande_document(session=session, demande_id=demande_id, doc_in=doc_in)
 
 
 @router.post("/{demande_id}/documents/{document_id}/upload")
