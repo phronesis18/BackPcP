@@ -26,22 +26,33 @@ SessionDep = Annotated[Session, Depends(get_db)]
 TokenDep = Annotated[str, Depends(reusable_oauth2)]
 
 
-def get_current_user(session: SessionDep, token: TokenDep) -> User:
+def get_user_from_token(session: Session, token: str) -> User | None:
+    """
+    Decode a raw JWT and look up its user, returning None instead of raising
+    on any failure. Shared by the HTTP dependency below and by the WebSocket
+    routes, which can't rely on the OAuth2PasswordBearer/Authorization header
+    flow (browsers can't set custom headers on a WebSocket handshake).
+    """
     try:
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
         )
         token_data = TokenPayload(**payload)
     except (InvalidTokenError, ValidationError):
+        return None
+    user = session.get(User, token_data.sub)
+    if not user or not user.is_active:
+        return None
+    return user
+
+
+def get_current_user(session: SessionDep, token: TokenDep) -> User:
+    user = get_user_from_token(session, token)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Could not validate credentials",
         )
-    user = session.get(User, token_data.sub)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
     return user
 
 
