@@ -1,9 +1,11 @@
 import uuid
+from datetime import date
 from typing import Any
 
 from sqlmodel import Session, col, func, select
 
 from app.core.security import get_password_hash, verify_password
+from app.gps_simulator import generate_gps_device_id, generate_plate
 from app.models import (
     ChatMessage,
     ChatMessageCreate,
@@ -11,6 +13,9 @@ from app.models import (
     ContratCreate,
     Demande,
     DemandeCreate,
+    Distribution,
+    DistributionCreate,
+    DistributionUpdate,
     Document,
     DocumentCreate,
     Marque,
@@ -22,8 +27,12 @@ from app.models import (
     ModeleAnneeUpdate,
     ModeleCreate,
     ModeleUpdate,
+    OrigineRelance,
+    Paiement,
     ParametresFinanciers,
     ParametresFinanciersUpdate,
+    Relance,
+    RelanceCreate,
     StatutDemande,
     User,
     UserCreate,
@@ -155,7 +164,14 @@ def get_contrat(*, session: Session, demande_id: uuid.UUID) -> Contrat | None:
 def create_contrat(
     *, session: Session, demande_id: uuid.UUID, contrat_in: ContratCreate
 ) -> Contrat:
-    contrat = Contrat(demande_id=demande_id, **contrat_in.model_dump())
+    contrat_id = uuid.uuid4()
+    contrat = Contrat(
+        id=contrat_id,
+        demande_id=demande_id,
+        plate=generate_plate(contrat_id),
+        gps_device_id=generate_gps_device_id(contrat_id),
+        **contrat_in.model_dump(),
+    )
     session.add(contrat)
     demande = session.get(Demande, demande_id)
     if demande:
@@ -163,7 +179,137 @@ def create_contrat(
         session.add(demande)
     session.commit()
     session.refresh(contrat)
+    create_paiements_for_contrat(session=session, contrat=contrat, demande=demande)
+    session.refresh(contrat)
     return contrat
+
+
+# ---------------------------------------------------------------------------
+# Paiements (échéancier réel) & Recover Bot (relances)
+# ---------------------------------------------------------------------------
+
+
+def create_paiements_for_contrat(
+    *, session: Session, contrat: Contrat, demande: Demande | None
+) -> list[Paiement]:
+    """
+    Génère l'échéancier réel du contrat à la signature : une ligne `Paiement`
+    par mensualité, ancrée sur la date de signature (échéance le 5 de chaque
+    mois, comme le fait déjà FrontPcp/src/lib/echeances.ts côté maquette).
+    """
+    if demande is None or not demande.mensualite:
+        return []
+
+    signed = contrat.signed_at.date()
+    paiements: list[Paiement] = []
+    for i in range(1, demande.duree_mois + 1):
+        month = signed.month - 1 + i
+        year = signed.year + month // 12
+        month = month % 12 + 1
+        echeance = date(year, month, 5)
+        paiement = Paiement(
+            contrat_id=contrat.id,
+            index=i,
+            date_echeance=echeance,
+            montant=demande.mensualite,
+        )
+        session.add(paiement)
+        paiements.append(paiement)
+    session.commit()
+    return paiements
+
+
+def get_paiements(*, session: Session, contrat_id: uuid.UUID) -> list[Paiement]:
+    statement = (
+        select(Paiement).where(Paiement.contrat_id == contrat_id).order_by(col(Paiement.index))
+    )
+    return list(session.exec(statement).all())
+
+
+def pay_echeance(
+    *, session: Session, paiement: Paiement, mode_paiement: str
+) -> Paiement:
+    paiement.paid_at = get_datetime_utc()
+    paiement.mode_paiement = mode_paiement
+    session.add(paiement)
+    session.commit()
+    session.refresh(paiement)
+    return paiement
+
+
+def get_relances(*, session: Session, contrat_id: uuid.UUID) -> list[Relance]:
+    statement = (
+        select(Relance)
+        .where(Relance.contrat_id == contrat_id)
+        .order_by(col(Relance.created_at).desc())
+    )
+    return list(session.exec(statement).all())
+
+
+def create_relance(
+    *,
+    session: Session,
+    contrat_id: uuid.UUID,
+    relance_in: RelanceCreate,
+    created_by: uuid.UUID | None,
+) -> Relance:
+    relance = Relance(
+        contrat_id=contrat_id,
+        canal=relance_in.canal,
+        note=relance_in.note,
+        origine=OrigineRelance.manuel,
+        created_by=created_by,
+    )
+    session.add(relance)
+    session.commit()
+    session.refresh(relance)
+    return relance
+
+
+def get_contrats(*, session: Session) -> list[Contrat]:
+    """Tous les contrats signés — la 'flotte' et le portefeuille de dossiers actifs."""
+    statement = select(Contrat).order_by(col(Contrat.signed_at).desc())
+    return list(session.exec(statement).all())
+
+
+def get_contrat_by_id(*, session: Session, contrat_id: uuid.UUID) -> Contrat | None:
+    return session.get(Contrat, contrat_id)
+
+
+# ---------------------------------------------------------------------------
+# Fonds — distributions aux investisseurs
+# ---------------------------------------------------------------------------
+
+
+def get_distributions(*, session: Session) -> list[Distribution]:
+    statement = select(Distribution).order_by(col(Distribution.date_versement).desc())
+    return list(session.exec(statement).all())
+
+
+def create_distribution(*, session: Session, distribution_in: DistributionCreate) -> Distribution:
+    distribution = Distribution.model_validate(distribution_in)
+    session.add(distribution)
+    session.commit()
+    session.refresh(distribution)
+    return distribution
+
+
+def update_distribution(
+    *, session: Session, db_distribution: Distribution, distribution_in: DistributionUpdate
+) -> Distribution:
+    data = distribution_in.model_dump(exclude_unset=True)
+    db_distribution.sqlmodel_update(data)
+    session.add(db_distribution)
+    session.commit()
+    session.refresh(db_distribution)
+    return db_distribution
+
+
+def get_investisseurs_total_capital(*, session: Session) -> int:
+    statement = select(func.coalesce(func.sum(User.capital_investi), 0)).where(
+        User.is_investisseur == True  # noqa: E712
+    )
+    return session.exec(statement).one()
 
 
 def get_demande(*, session: Session, demande_id: uuid.UUID) -> Demande | None:

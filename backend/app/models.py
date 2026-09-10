@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from pydantic import EmailStr
-from sqlalchemy import Date, DateTime, LargeBinary, Text
+from sqlalchemy import Date, DateTime, LargeBinary, Text, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -44,6 +44,10 @@ class UserBase(SQLModel):
     is_admin: bool = False
     is_investisseur: bool = False
     full_name: str | None = Field(default=None, max_length=255)
+    # Montant engagé par un utilisateur investisseur dans le fonds PCP, en XOF.
+    # Renseigné par un admin (aucun cap-table LP réel) ; sert de base au calcul
+    # de la part et des dividendes affichés sur le Dashboard Investisseur.
+    capital_investi: int | None = Field(default=None)
 
 
 # Properties to receive via API on creation
@@ -168,6 +172,7 @@ class Demande(SQLModel, table=True):
     documents: list[Document] = Relationship(
         back_populates="demande", cascade_delete=True
     )
+    contrat: "Contrat" = Relationship(back_populates="demande")
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +480,12 @@ class Contrat(SQLModel, table=True):
     )
     contenu: str = Field(sa_type=Text)  # type: ignore
     signature: str = Field(sa_type=Text)  # type: ignore
+    # Identité "véhicule connecté" attribuée à la signature — plaque et boîtier
+    # GPS générés de façon déterministe (voir app/gps_simulator.py), pas de
+    # vrai parc à immatriculer manuellement.
+    plate: str = Field(max_length=20, unique=True)
+    gps_device_id: str = Field(max_length=50, unique=True)
+    cutoff_active: bool = Field(default=False)
     signed_at: datetime = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),  # type: ignore
@@ -482,6 +493,13 @@ class Contrat(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    demande: Demande = Relationship(back_populates="contrat")
+    paiements: list["Paiement"] = Relationship(
+        back_populates="contrat", cascade_delete=True
+    )
+    relances: list["Relance"] = Relationship(
+        back_populates="contrat", cascade_delete=True
     )
 
 
@@ -495,7 +513,297 @@ class ContratPublic(SQLModel):
     demande_id: uuid.UUID
     contenu: str
     signature: str
+    plate: str
+    gps_device_id: str
+    cutoff_active: bool
     signed_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Paiements (échéancier réel du contrat) & Recover Bot (relances)
+# ---------------------------------------------------------------------------
+
+
+class Paiement(SQLModel, table=True):
+    """
+    Une ligne par échéance mensuelle d'un contrat, créée en bloc à la
+    signature (voir crud.create_paiements_for_contrat). `paid_at` est le seul
+    signal de vérité : tant qu'il est vide, l'échéance est "attendue" puis
+    "en retard" une fois `date_echeance` dépassée — ce calcul est fait à la
+    volée (voir app/recouvrement.py), jamais stocké.
+    """
+
+    __table_args__ = (UniqueConstraint("contrat_id", "index"),)
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    contrat_id: uuid.UUID = Field(
+        foreign_key="contrat.id", nullable=False, ondelete="CASCADE"
+    )
+    index: int
+    date_echeance: date = Field(sa_type=Date)  # type: ignore
+    montant: int
+    paid_at: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True)  # type: ignore
+    )
+    mode_paiement: str | None = Field(default=None, max_length=30)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    contrat: Contrat = Relationship(back_populates="paiements")
+
+
+class PaiementPayer(SQLModel):
+    mode_paiement: str = Field(default="mtn_momo", max_length=30)
+
+
+class EcheancePublic(SQLModel):
+    id: uuid.UUID
+    contrat_id: uuid.UUID
+    index: int
+    date_echeance: date
+    montant: int
+    statut: str  # "paye" | "retard" | "attendu"
+    paid_at: datetime | None = None
+    mode_paiement: str | None = None
+
+
+class EcheancesPublic(SQLModel):
+    data: list[EcheancePublic]
+    count: int
+
+
+class CanalRelance(str, enum.Enum):
+    sms = "sms"
+    whatsapp = "whatsapp"
+    appel = "appel"
+    coupe_moteur = "coupe_moteur"
+    reactivation = "reactivation"
+
+
+class OrigineRelance(str, enum.Enum):
+    auto = "auto"
+    manuel = "manuel"
+
+
+class Relance(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    contrat_id: uuid.UUID = Field(
+        foreign_key="contrat.id", nullable=False, ondelete="CASCADE"
+    )
+    canal: CanalRelance
+    origine: OrigineRelance = Field(default=OrigineRelance.auto)
+    note: str | None = Field(default=None, max_length=500)
+    created_by: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", nullable=True, ondelete="SET NULL"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    contrat: Contrat = Relationship(back_populates="relances")
+
+
+class RelanceCreate(SQLModel):
+    canal: CanalRelance
+    note: str | None = Field(default=None, max_length=500)
+
+
+class RelancePublic(SQLModel):
+    id: uuid.UUID
+    contrat_id: uuid.UUID
+    canal: CanalRelance
+    origine: OrigineRelance
+    note: str | None = None
+    created_by_name: str | None = None
+    created_at: datetime | None = None
+
+
+class RelancesPublic(SQLModel):
+    data: list[RelancePublic]
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# Fonds — capital investisseur & distributions
+# ---------------------------------------------------------------------------
+
+
+class StatutDistribution(str, enum.Enum):
+    prevue = "prevue"
+    versee = "versee"
+
+
+class DistributionBase(SQLModel):
+    periode: str = Field(max_length=40)
+    montant_total: int
+    statut: StatutDistribution = Field(default=StatutDistribution.prevue)
+    date_versement: date = Field(sa_type=Date)  # type: ignore
+
+
+class DistributionCreate(DistributionBase):
+    pass
+
+
+class DistributionUpdate(SQLModel):
+    periode: str | None = Field(default=None, max_length=40)
+    montant_total: int | None = None
+    statut: StatutDistribution | None = None
+    date_versement: date | None = None
+
+
+class Distribution(DistributionBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class DistributionPublic(DistributionBase):
+    id: uuid.UUID
+    created_at: datetime | None = None
+
+
+class DistributionsPublic(SQLModel):
+    data: list[DistributionPublic]
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# Vues composées — Recouvrement (Recover Bot), Fleet Monitor, Investisseur
+# ---------------------------------------------------------------------------
+
+
+class ContratDossierPublic(SQLModel):
+    id: uuid.UUID
+    demande_id: uuid.UUID
+    reference: str
+    client_nom: str
+    client_telephone: str | None = None
+    vehicule: str
+    montant_finance: int
+    duree_mois: int
+    mensualite: int | None = None
+    plate: str
+    cutoff_active: bool
+    jours_retard: int
+    phase: int
+    phase_label: str
+    montant_du: int
+    derniere_action: RelancePublic | None = None
+    prochaine_echeance: EcheancePublic | None = None
+
+
+class ContratsDossierPublic(SQLModel):
+    data: list[ContratDossierPublic]
+    count: int
+
+
+class RecouvrementPhaseConfig(SQLModel):
+    index: int
+    canal: CanalRelance
+    label: str
+    seuil_jours: int
+
+
+class RecouvrementConfigPublic(SQLModel):
+    phases: list[RecouvrementPhaseConfig]
+
+
+class PositionPublic(SQLModel):
+    lat: float
+    lon: float
+    lieu: str
+
+
+class VehiculePublic(SQLModel):
+    id: uuid.UUID
+    demande_id: uuid.UUID
+    plate: str
+    client_nom: str
+    vehicule: str
+    position: PositionPublic
+    vitesse: int
+    moteur: bool
+    statut: str  # "normal" | "alerte" | "coupe"
+    cutoff_active: bool
+    derniere_maj: datetime
+
+
+class VehiculesPublic(SQLModel):
+    data: list[VehiculePublic]
+    count: int
+
+
+class StatsDuJourPublic(SQLModel):
+    distance_km: float
+    duree_moteur_min: int
+    nb_trajets: int
+
+
+class VehiculeDetailPublic(VehiculePublic):
+    gps_device_id: str
+    stats_du_jour: StatsDuJourPublic
+
+
+class TrajetPublic(SQLModel):
+    depart: str
+    arrivee: str
+    debut: datetime
+    duree_min: int
+    distance_km: float
+    vitesse_max: int
+
+
+class TrajetsPublic(SQLModel):
+    data: list[TrajetPublic]
+    count: int
+
+
+class AlertePublic(SQLModel):
+    type: str
+    message: str
+    survenue_a: datetime
+
+
+class AlertesPublic(SQLModel):
+    data: list[AlertePublic]
+    count: int
+
+
+class FleetStatsPublic(SQLModel):
+    nb_vehicules: int
+    distance_totale_km: float
+    nb_trajets: int
+    vitesse_moyenne_kmh: float
+    disponibilite_gps_pct: float
+    distance_par_semaine: list[dict]
+
+
+class EvolutionEncoursPoint(SQLModel):
+    mois: str
+    encours: int
+
+
+class RepartitionMarque(SQLModel):
+    marque: str
+    count: int
+    pct: float
+
+
+class InvestissementPerformancePublic(SQLModel):
+    encours_total: int
+    contrats_actifs: int
+    taux_impayes_pct: float
+    teg_moyen_pondere: float
+    evolution: list[EvolutionEncoursPoint]
+    repartition_marque: list[RepartitionMarque]
+    capital_total_investisseurs: int
+    mon_investissement: int | None = None
+    part_du_fonds_pct: float | None = None
+    mes_dividendes_recus: int | None = None
+    prochain_versement: DistributionPublic | None = None
 
 
 # ---------------------------------------------------------------------------
