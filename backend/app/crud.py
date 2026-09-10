@@ -350,6 +350,17 @@ def create_demande_document(
     return document
 
 
+def set_document_ocr_resultat(
+    *, session: Session, document: Document, resultat: dict
+) -> Document:
+    document.ocr = True
+    document.ocr_resultat = resultat
+    session.add(document)
+    session.commit()
+    session.refresh(document)
+    return document
+
+
 # ---------------------------------------------------------------------------
 # Catalogue véhicules (Marque -> Modele -> ModeleAnnee)
 # ---------------------------------------------------------------------------

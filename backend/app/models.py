@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from pydantic import EmailStr
-from sqlalchemy import Date, DateTime, LargeBinary, Text
+from sqlalchemy import JSON, Date, DateTime, LargeBinary, Text
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -110,6 +110,10 @@ class Document(SQLModel, table=True):
     nom: str | None = Field(default=None, max_length=255)
     statut: StatutDocument = Field(default=StatutDocument.pending)
     ocr: bool = False
+    # Résultat de la dernière extraction OCR (Claude Vision) : champs lus et
+    # écarts éventuels avec le déclaratif. None tant qu'aucune analyse n'a
+    # été lancée — voir app/ocr.py pour le format exact.
+    ocr_resultat: dict | None = Field(default=None, sa_type=JSON)
     content_type: str | None = Field(default=None, max_length=100)
     fichier: bytes | None = Field(default=None, sa_type=LargeBinary)
     demande_id: uuid.UUID = Field(
@@ -378,6 +382,7 @@ class DocumentPublic(DocumentBase):
     demande_id: uuid.UUID
     created_at: datetime | None = None
     has_file: bool = False
+    ocr_resultat: dict | None = None
 
 
 class DocumentsPublic(SQLModel):

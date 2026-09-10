@@ -191,13 +191,27 @@ def compute_score(demande: Demande, seuil_scoring_auto: int = 75) -> dict:
                 }
             )
         nb_ocr = sum(1 for d in demande.documents if d.has_file and d.ocr)
-        if nb_fournis and nb_ocr == nb_fournis:
-            signaux.append({"type": "ok", "label": f"Vérification OCR validée sur les {nb_fournis} document(s) fourni(s)"})
+        nb_ecarts = sum(
+            1
+            for d in demande.documents
+            if d.has_file and d.ocr and d.ocr_resultat and d.ocr_resultat.get("ecarts")
+        )
+        if nb_ecarts:
+            signaux.append(
+                {
+                    "type": "warning",
+                    "label": f"Écart détecté par l'OCR sur {nb_ecarts} document(s) — à vérifier manuellement",
+                }
+            )
+        elif nb_fournis and nb_ocr == nb_fournis:
+            signaux.append(
+                {"type": "ok", "label": f"Documents analysés par OCR ({nb_fournis}/{nb_fournis}), aucun écart détecté"}
+            )
         elif nb_fournis:
             signaux.append(
                 {
                     "type": "warning",
-                    "label": f"Vérification OCR incomplète ({nb_ocr}/{nb_fournis} documents fournis validés)",
+                    "label": f"Analyse OCR incomplète ({nb_ocr}/{nb_fournis} documents fournis analysés)",
                 }
             )
     else:

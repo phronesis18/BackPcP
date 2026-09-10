@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER: EmailStr
     FIRST_SUPERUSER_PASSWORD: str
 
+    # Extraction OCR des documents (CNI, bulletin de salaire) via Claude Vision.
+    # Sans clé, la route d'analyse renvoie une erreur explicite plutôt que de
+    # simuler un résultat.
+    ANTHROPIC_API_KEY: str | None = None
+
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
             message = (
