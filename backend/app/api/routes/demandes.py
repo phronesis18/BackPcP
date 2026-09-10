@@ -14,6 +14,7 @@ from app.crud import (
     get_contrat,
     get_demande,
     get_demandes,
+    get_or_create_parametres_financiers,
 )
 from app.models import (
     ContratCreate,
@@ -38,7 +39,8 @@ router = APIRouter(prefix="/demandes", tags=["demandes"])
 
 def to_demande_public(session: Session, demande: Demande, viewer: User) -> DemandePublic:
     public = DemandePublic.model_validate(demande)
-    public.score = compute_score(demande)
+    parametres = get_or_create_parametres_financiers(session=session)
+    public.score = compute_score(demande, seuil_scoring_auto=parametres.seuil_scoring_auto)
     if demande.owner:
         public.owner_phone = demande.owner.phone
         public.owner_email = demande.owner.email
@@ -99,8 +101,21 @@ def create_demande_route(
     demande_in: DemandeCreate,
 ) -> Any:
     """
-    Create a new credit application for the authenticated user.
+    Create a new credit application for the authenticated user. Drafts
+    (statut=brouillon) skip the amount-bounds check since the form may still
+    be incomplete — the check only applies to a real submission.
     """
+    if demande_in.statut != StatutDemande.brouillon:
+        parametres = get_or_create_parametres_financiers(session=session)
+        montant_finance = demande_in.prix_vehicule * (1 - parametres.taux_apport)
+        if montant_finance < parametres.montant_min or montant_finance > parametres.montant_max:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Montant financé estimé ({montant_finance:.0f} FCFA) hors des bornes "
+                    f"autorisées ({parametres.montant_min} - {parametres.montant_max} FCFA)."
+                ),
+            )
     demande = create_demande(
         session=session, demande_in=demande_in, owner_id=current_user.id
     )

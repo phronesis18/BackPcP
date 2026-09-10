@@ -1,10 +1,14 @@
+import calendar
 import uuid
+from datetime import date
 from typing import Any
 
 from sqlmodel import Session, col, func, select
 
 from app.core.security import get_password_hash, verify_password
 from app.models import (
+    ActionRecouvrement,
+    ActionRecouvrementCreate,
     ChatMessage,
     ChatMessageCreate,
     Contrat,
@@ -13,6 +17,7 @@ from app.models import (
     DemandeCreate,
     Document,
     DocumentCreate,
+    Echeance,
     Marque,
     MarqueCreate,
     MarqueUpdate,
@@ -28,6 +33,8 @@ from app.models import (
     User,
     UserCreate,
     UserUpdate,
+    VehiculeFlotte,
+    VehiculeFlotteUpdate,
     Vendeur,
     VendeurCreate,
     VendeurUpdate,
@@ -152,6 +159,14 @@ def get_contrat(*, session: Session, demande_id: uuid.UUID) -> Contrat | None:
     return session.exec(statement).first()
 
 
+def _add_months(d: date, months: int) -> date:
+    month_index = d.month - 1 + months
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
 def create_contrat(
     *, session: Session, demande_id: uuid.UUID, contrat_in: ContratCreate
 ) -> Contrat:
@@ -163,7 +178,162 @@ def create_contrat(
         session.add(demande)
     session.commit()
     session.refresh(contrat)
+    # Les remboursements ne sont dus qu'à compter de la signature — c'est le
+    # seul moment réel qui justifie de générer l'échéancier.
+    if demande and demande.mensualite and demande.duree_mois:
+        create_echeances(
+            session=session,
+            demande_id=demande_id,
+            duree_mois=demande.duree_mois,
+            mensualite=demande.mensualite,
+            depart=contrat.signed_at.date(),
+        )
+    # Un véhicule financé entre dans le suivi de flotte dès la signature.
+    if demande:
+        get_or_create_vehicule_flotte(session=session, demande_id=demande_id)
     return contrat
+
+
+# ---------------------------------------------------------------------------
+# Recouvrement — échéancier réel et journal des actions de relance
+# ---------------------------------------------------------------------------
+
+
+def create_echeances(
+    *, session: Session, demande_id: uuid.UUID, duree_mois: int, mensualite: int, depart: date
+) -> list[Echeance]:
+    echeances = [
+        Echeance(
+            demande_id=demande_id,
+            numero=numero,
+            date_echeance=_add_months(depart, numero),
+            montant=mensualite,
+        )
+        for numero in range(1, duree_mois + 1)
+    ]
+    session.add_all(echeances)
+    session.commit()
+    for e in echeances:
+        session.refresh(e)
+    return echeances
+
+
+def get_echeances(*, session: Session, demande_id: uuid.UUID) -> list[Echeance]:
+    statement = (
+        select(Echeance)
+        .where(Echeance.demande_id == demande_id)
+        .order_by(col(Echeance.numero))
+    )
+    return list(session.exec(statement).all())
+
+
+def get_echeance(*, session: Session, echeance_id: uuid.UUID) -> Echeance | None:
+    return session.get(Echeance, echeance_id)
+
+
+def marquer_echeance_payee(*, session: Session, echeance: Echeance) -> Echeance:
+    echeance.payee = True
+    echeance.payee_le = get_datetime_utc()
+    session.add(echeance)
+    session.commit()
+    session.refresh(echeance)
+    return echeance
+
+
+def annuler_echeance_payee(*, session: Session, echeance: Echeance) -> Echeance:
+    echeance.payee = False
+    echeance.payee_le = None
+    session.add(echeance)
+    session.commit()
+    session.refresh(echeance)
+    return echeance
+
+
+def list_demandes_avec_echeancier(*, session: Session) -> list[Demande]:
+    statement = (
+        select(Demande)
+        .join(Echeance, Echeance.demande_id == Demande.id)
+        .distinct()
+    )
+    return list(session.exec(statement).all())
+
+
+def create_action_recouvrement(
+    *,
+    session: Session,
+    demande_id: uuid.UUID,
+    created_by_id: uuid.UUID,
+    action_in: ActionRecouvrementCreate,
+) -> ActionRecouvrement:
+    action = ActionRecouvrement(
+        demande_id=demande_id, created_by_id=created_by_id, **action_in.model_dump()
+    )
+    session.add(action)
+    session.commit()
+    session.refresh(action)
+    return action
+
+
+def get_actions_recouvrement(
+    *, session: Session, demande_id: uuid.UUID
+) -> list[ActionRecouvrement]:
+    statement = (
+        select(ActionRecouvrement)
+        .where(ActionRecouvrement.demande_id == demande_id)
+        .order_by(col(ActionRecouvrement.created_at).desc())
+    )
+    return list(session.exec(statement).all())
+
+
+# ---------------------------------------------------------------------------
+# Fleet Monitor — fiche véhicule réelle (une par contrat signé)
+# ---------------------------------------------------------------------------
+
+
+def get_or_create_vehicule_flotte(
+    *, session: Session, demande_id: uuid.UUID
+) -> VehiculeFlotte:
+    vehicule = session.exec(
+        select(VehiculeFlotte).where(VehiculeFlotte.demande_id == demande_id)
+    ).first()
+    if vehicule:
+        return vehicule
+    vehicule = VehiculeFlotte(demande_id=demande_id)
+    session.add(vehicule)
+    session.commit()
+    session.refresh(vehicule)
+    return vehicule
+
+
+def get_vehicule_flotte(
+    *, session: Session, demande_id: uuid.UUID
+) -> VehiculeFlotte | None:
+    return session.exec(
+        select(VehiculeFlotte).where(VehiculeFlotte.demande_id == demande_id)
+    ).first()
+
+
+def list_vehicules_flotte(*, session: Session) -> list[VehiculeFlotte]:
+    statement = select(VehiculeFlotte).order_by(col(VehiculeFlotte.created_at))
+    return list(session.exec(statement).all())
+
+
+def update_vehicule_flotte(
+    *,
+    session: Session,
+    vehicule: VehiculeFlotte,
+    vehicule_in: VehiculeFlotteUpdate,
+    updated_by_id: uuid.UUID,
+) -> VehiculeFlotte:
+    update_data = vehicule_in.model_dump(exclude_unset=True)
+    vehicule.sqlmodel_update(update_data)
+    if "position_label" in update_data:
+        vehicule.position_maj_le = get_datetime_utc()
+    vehicule.updated_by_id = updated_by_id
+    session.add(vehicule)
+    session.commit()
+    session.refresh(vehicule)
+    return vehicule
 
 
 def get_demande(*, session: Session, demande_id: uuid.UUID) -> Demande | None:
