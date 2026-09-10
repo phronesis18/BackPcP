@@ -69,26 +69,30 @@ def read_performance(session: SessionDep, current_user: CurrentUser) -> Any:
     for contrat in contrats:
         ctx = build_context(session=session, contrat=contrat, today=today, reconcile=False)
         restant = sum(p.montant for p in ctx.paiements if p.paid_at is None)
+        prix = ctx.demande.prix_vehicule or 0
+
+        # Le portefeuille "actif" — encours, répartition, TEG et impayés —
+        # ne porte que sur les contrats encore en cours de remboursement.
+        # Un contrat soldé ne pèse plus sur la performance courante du fonds.
         if restant > 0:
             contrats_actifs += 1
             encours_total += restant
-        if ctx.jours_retard > 0:
-            en_retard += 1
+            if ctx.jours_retard > 0:
+                en_retard += 1
+            if ctx.demande.taux_teg is not None and prix:
+                teg_pondere_somme += ctx.demande.taux_teg * prix
+                poids_total += prix
+            marque = ctx.demande.marque or "Autres"
+            marque_counts[marque] = marque_counts.get(marque, 0) + 1
 
-        prix = ctx.demande.prix_vehicule or 0
-        if ctx.demande.taux_teg is not None and prix:
-            teg_pondere_somme += ctx.demande.taux_teg * prix
-            poids_total += prix
-
-        marque = ctx.demande.marque or "Autres"
-        marque_counts[marque] = marque_counts.get(marque, 0) + 1
-
+        # L'évolution du capital engagé, elle, reste cumulative dans le temps
+        # (elle raconte la croissance du fonds, pas son état courant).
         signed = contrat.signed_at.date()
         key = _month_key(signed)
         mois_cumule[key] = mois_cumule.get(key, 0) + prix
 
     teg_moyen = round(teg_pondere_somme / poids_total, 2) if poids_total else 0.0
-    taux_impayes = round((en_retard / len(contrats)) * 100, 1) if contrats else 0.0
+    taux_impayes = round((en_retard / contrats_actifs) * 100, 1) if contrats_actifs else 0.0
 
     # Évolution du capital engagé cumulé sur les 6 derniers mois calendaires.
     current_key = _month_key(today)
