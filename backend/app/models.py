@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from pydantic import EmailStr
-from sqlalchemy import Date, DateTime, LargeBinary, Text
+from sqlalchemy import JSON, Date, DateTime, LargeBinary, Text
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -110,6 +110,10 @@ class Document(SQLModel, table=True):
     nom: str | None = Field(default=None, max_length=255)
     statut: StatutDocument = Field(default=StatutDocument.pending)
     ocr: bool = False
+    # Résultat de la dernière extraction OCR (Claude Vision) : champs lus et
+    # écarts éventuels avec le déclaratif. None tant qu'aucune analyse n'a
+    # été lancée — voir app/ocr.py pour le format exact.
+    ocr_resultat: dict | None = Field(default=None, sa_type=JSON)
     content_type: str | None = Field(default=None, max_length=100)
     fichier: bytes | None = Field(default=None, sa_type=LargeBinary)
     demande_id: uuid.UUID = Field(
@@ -325,11 +329,23 @@ class VendeursPublic(SQLModel):
 class ParametresFinanciersBase(SQLModel):
     taux_teg_annuel: float = Field(default=22.0)
     taux_apport: float = Field(default=0.25)
+    # Pourcentage (0-100) du score disponible à partir duquel un dossier est
+    # approuvé automatiquement. Un pourcentage plutôt qu'un score absolu : le
+    # max réellement atteignable évolue (400/850 aujourd'hui tant que Mobile
+    # Money/BCEAO ne sont pas connectés), donc ce seuil doit parler la même
+    # langue que ce qui est affiché, quel que soit le max du moment. Voir
+    # app/scoring.py.
+    seuil_scoring_auto: int = Field(default=75)
+    montant_min: int = Field(default=1_000_000)
+    montant_max: int = Field(default=30_000_000)
 
 
 class ParametresFinanciersUpdate(SQLModel):
     taux_teg_annuel: float | None = None
     taux_apport: float | None = None
+    seuil_scoring_auto: int | None = None
+    montant_min: int | None = None
+    montant_max: int | None = None
 
 
 class ParametresFinanciers(ParametresFinanciersBase, table=True):
@@ -366,6 +382,7 @@ class DocumentPublic(DocumentBase):
     demande_id: uuid.UUID
     created_at: datetime | None = None
     has_file: bool = False
+    ocr_resultat: dict | None = None
 
 
 class DocumentsPublic(SQLModel):
@@ -496,6 +513,183 @@ class ContratPublic(SQLModel):
     contenu: str
     signature: str
     signed_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Recouvrement — échéancier réel (généré à la signature du contrat) et
+# journal des actions de relance. Il n'existe aucun connecteur SMS/WhatsApp/
+# GPS-immobilisateur réel à ce jour : les actions ci-dessous sont des
+# constats manuels consignés par un admin, pas des envois automatiques.
+# ---------------------------------------------------------------------------
+
+
+class Echeance(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    demande_id: uuid.UUID = Field(
+        foreign_key="demande.id", nullable=False, ondelete="CASCADE"
+    )
+    numero: int
+    date_echeance: date = Field(sa_type=Date)  # type: ignore
+    montant: int
+    payee: bool = Field(default=False)
+    payee_le: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True)  # type: ignore
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class EcheancePublic(SQLModel):
+    id: uuid.UUID
+    demande_id: uuid.UUID
+    numero: int
+    date_echeance: date
+    montant: int
+    payee: bool
+    payee_le: datetime | None
+
+
+class EcheancesPublic(SQLModel):
+    data: list[EcheancePublic]
+    count: int
+
+
+# Types d'action reconnus par la route — tout autre type est rejeté (422).
+TYPES_ACTION_RECOUVREMENT = {
+    "sms",
+    "whatsapp",
+    "appel",
+    "mise_en_demeure",
+    "coupe_moteur",
+    "reactivation",
+    "contentieux",
+}
+
+
+class ActionRecouvrementBase(SQLModel):
+    type: str = Field(max_length=30)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ActionRecouvrementCreate(ActionRecouvrementBase):
+    pass
+
+
+class ActionRecouvrement(ActionRecouvrementBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    demande_id: uuid.UUID = Field(
+        foreign_key="demande.id", nullable=False, ondelete="CASCADE"
+    )
+    created_by_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class ActionRecouvrementPublic(ActionRecouvrementBase):
+    id: uuid.UUID
+    demande_id: uuid.UUID
+    created_by_nom: str
+    created_at: datetime | None = None
+
+
+class ActionsRecouvrementPublic(SQLModel):
+    data: list[ActionRecouvrementPublic]
+    count: int
+
+
+class RecouvrementInfo(SQLModel):
+    en_retard: bool = False
+    jours_retard: int = 0
+    montant_du: int = 0
+    # "j1_15" | "j16_30" | "coupe_moteur" | None (pas de retard)
+    phase: str | None = None
+    moteur_coupe: bool = False
+    derniere_action: ActionRecouvrementPublic | None = None
+    prochaine_action_suggeree: str | None = None
+    prochaine_action_date: date | None = None
+
+
+class DossierRecouvrementPublic(SQLModel):
+    demande_id: uuid.UUID
+    client_nom: str
+    # Le frontend compose la référence lisible (PCP-<année>-<id>) à partir de
+    # created_at, comme partout ailleurs — pas de logique de formatage dupliquée ici.
+    created_at: datetime | None = None
+    recouvrement: RecouvrementInfo
+
+
+class DossiersRecouvrementPublic(SQLModel):
+    data: list[DossierRecouvrementPublic]
+    resume: dict[str, int]
+
+
+# ---------------------------------------------------------------------------
+# Fleet Monitor — fiche véhicule réelle, une par contrat signé. Il n'existe
+# aucun boîtier GPS/immobilisateur connecté à ce jour : la plaque et la
+# position sont saisies à la main par un admin, et le statut moteur reflète
+# le journal ActionRecouvrement — la même source que le module Recouvrement,
+# pour ne jamais avoir deux écrans qui se contredisent sur "moteur coupé".
+# ---------------------------------------------------------------------------
+
+
+class VehiculeFlotteBase(SQLModel):
+    plaque: str | None = Field(default=None, max_length=20)
+    position_label: str | None = Field(default=None, max_length=120)
+
+
+class VehiculeFlotteUpdate(SQLModel):
+    plaque: str | None = Field(default=None, max_length=20)
+    position_label: str | None = Field(default=None, max_length=120)
+
+
+class VehiculeFlotte(VehiculeFlotteBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    demande_id: uuid.UUID = Field(
+        foreign_key="demande.id", nullable=False, unique=True, ondelete="CASCADE"
+    )
+    position_maj_le: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True)  # type: ignore
+    )
+    updated_by_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", ondelete="SET NULL"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class VehiculeFlottePublic(VehiculeFlotteBase):
+    id: uuid.UUID
+    demande_id: uuid.UUID
+    marque: str | None = None
+    modele: str | None = None
+    annee: int | None = None
+    conducteur_nom: str
+    conducteur_telephone: str | None = None
+    position_maj_le: datetime | None = None
+    # "normal" | "alerte" | "coupe_moteur" — calculé, jamais stocké tel quel.
+    statut: str
+    moteur_coupe: bool
+    jours_retard: int
+    montant_du: int
+
+
+class VehiculesFlottePublic(SQLModel):
+    data: list[VehiculeFlottePublic]
+    count: int
+
+
+class FicheVehiculePublic(SQLModel):
+    vehicule: VehiculeFlottePublic
+    recouvrement: RecouvrementInfo
+    actions: list[ActionRecouvrementPublic]
 
 
 # ---------------------------------------------------------------------------

@@ -88,7 +88,17 @@ def _document_fourni(demande: Demande, keywords: tuple[str, ...]) -> bool:
     return False
 
 
-def compute_score(demande: Demande) -> dict:
+def compute_score(demande: Demande, seuil_scoring_auto: int = 75) -> dict:
+    """
+    `seuil_scoring_auto` is the configurable auto-approval cutoff from
+    ParametresFinanciers, as a percentage (0-100) of whatever score max is
+    actually available today (axes that aren't connected yet don't count).
+    A percentage rather than an absolute score: the real max moves as more
+    axes get connected (400/850 today), so the threshold has to speak the
+    same language as what's actually displayed, not some other scale.
+    Tightening/loosening it in Paramètres système immediately changes which
+    dossiers get approuve_auto.
+    """
     axes = []
     total = 0
     total_max = 0
@@ -118,9 +128,11 @@ def compute_score(demande: Demande) -> dict:
         total_max += axe["max"]
 
     pct = (total / total_max * 100) if total_max else 0
-    if pct >= 75:
+    seuil_auto_pct = _clamp(seuil_scoring_auto, 0, 100)
+    seuil_analyse_pct = seuil_auto_pct * (50 / 75)
+    if pct >= seuil_auto_pct:
         decision = "approuve_auto"
-    elif pct >= 50:
+    elif pct >= seuil_analyse_pct:
         decision = "analyse_renforcee"
     else:
         decision = "defavorable"
@@ -179,13 +191,27 @@ def compute_score(demande: Demande) -> dict:
                 }
             )
         nb_ocr = sum(1 for d in demande.documents if d.has_file and d.ocr)
-        if nb_fournis and nb_ocr == nb_fournis:
-            signaux.append({"type": "ok", "label": f"Vérification OCR validée sur les {nb_fournis} document(s) fourni(s)"})
+        nb_ecarts = sum(
+            1
+            for d in demande.documents
+            if d.has_file and d.ocr and d.ocr_resultat and d.ocr_resultat.get("ecarts")
+        )
+        if nb_ecarts:
+            signaux.append(
+                {
+                    "type": "warning",
+                    "label": f"Écart détecté par l'OCR sur {nb_ecarts} document(s) — à vérifier manuellement",
+                }
+            )
+        elif nb_fournis and nb_ocr == nb_fournis:
+            signaux.append(
+                {"type": "ok", "label": f"Documents analysés par OCR ({nb_fournis}/{nb_fournis}), aucun écart détecté"}
+            )
         elif nb_fournis:
             signaux.append(
                 {
                     "type": "warning",
-                    "label": f"Vérification OCR incomplète ({nb_ocr}/{nb_fournis} documents fournis validés)",
+                    "label": f"Analyse OCR incomplète ({nb_ocr}/{nb_fournis} documents fournis analysés)",
                 }
             )
     else:

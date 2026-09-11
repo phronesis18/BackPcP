@@ -14,6 +14,8 @@ from app.crud import (
     get_contrat,
     get_demande,
     get_demandes,
+    get_or_create_parametres_financiers,
+    set_document_ocr_resultat,
 )
 from app.models import (
     ContratCreate,
@@ -31,6 +33,7 @@ from app.models import (
     StatutDocument,
     User,
 )
+from app.ocr import OcrError, analyser_document
 from app.scoring import compute_score
 
 router = APIRouter(prefix="/demandes", tags=["demandes"])
@@ -38,7 +41,8 @@ router = APIRouter(prefix="/demandes", tags=["demandes"])
 
 def to_demande_public(session: Session, demande: Demande, viewer: User) -> DemandePublic:
     public = DemandePublic.model_validate(demande)
-    public.score = compute_score(demande)
+    parametres = get_or_create_parametres_financiers(session=session)
+    public.score = compute_score(demande, seuil_scoring_auto=parametres.seuil_scoring_auto)
     if demande.owner:
         public.owner_phone = demande.owner.phone
         public.owner_email = demande.owner.email
@@ -99,8 +103,21 @@ def create_demande_route(
     demande_in: DemandeCreate,
 ) -> Any:
     """
-    Create a new credit application for the authenticated user.
+    Create a new credit application for the authenticated user. Drafts
+    (statut=brouillon) skip the amount-bounds check since the form may still
+    be incomplete — the check only applies to a real submission.
     """
+    if demande_in.statut != StatutDemande.brouillon:
+        parametres = get_or_create_parametres_financiers(session=session)
+        montant_finance = demande_in.prix_vehicule * (1 - parametres.taux_apport)
+        if montant_finance < parametres.montant_min or montant_finance > parametres.montant_max:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Montant financé estimé ({montant_finance:.0f} FCFA) hors des bornes "
+                    f"autorisées ({parametres.montant_min} - {parametres.montant_max} FCFA)."
+                ),
+            )
     demande = create_demande(
         session=session, demande_in=demande_in, owner_id=current_user.id
     )
@@ -193,6 +210,37 @@ def download_document(
         media_type=document.content_type or "application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{document.nom}"'},
     )
+
+
+@router.post("/{demande_id}/documents/{document_id}/analyser", response_model=DocumentPublic)
+def analyser_document_route(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    demande_id: uuid.UUID,
+    document_id: uuid.UUID,
+) -> Any:
+    """
+    Lance une extraction OCR (Claude Vision) sur ce document et compare les
+    champs lus au déclaratif du dossier. Ne modifie jamais le score ni les
+    champs de la demande — seulement le résultat de l'analyse, pour qu'un
+    admin voie s'il y a un écart à vérifier.
+    """
+    if not (current_user.is_superuser or current_user.is_admin):
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    demande = get_demande(session=session, demande_id=demande_id)
+    if not demande:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    document = session.get(Document, document_id)
+    if not document or document.demande_id != demande_id:
+        raise HTTPException(status_code=404, detail="Document introuvable")
+
+    try:
+        resultat = analyser_document(document, demande)
+    except OcrError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return set_document_ocr_resultat(session=session, document=document, resultat=resultat)
 
 
 @router.patch("/{demande_id}", response_model=DemandePublic)
