@@ -80,10 +80,16 @@ DOC_KEYWORDS = {
 }
 
 
-def _document_fourni(demande: Demande, keywords: tuple[str, ...]) -> bool:
+def _document_ocr_analyse(demande: Demande, keywords: tuple[str, ...]) -> bool:
+    """
+    True only once an admin has actually run the OCR analysis on a matching
+    document (`Document.ocr`) — not just because a file was uploaded. There
+    is no OCR schema for bank statements yet (see app/ocr.py), so "Relevé
+    bancaire" stays False even with a file present; that's accurate, not a bug.
+    """
     for doc in demande.documents:
         type_lower = doc.type.lower()
-        if doc.has_file and any(kw in type_lower for kw in keywords):
+        if doc.has_file and doc.ocr and any(kw in type_lower for kw in keywords):
             return True
     return False
 
@@ -225,12 +231,13 @@ def compute_score(demande: Demande, seuil_scoring_auto: int = 75) -> dict:
     )
 
     # --- Sources de données utilisées ---
+    # Pas de "Consultation centrale des risques BCEAO" ni "Open Banking" ici :
+    # aucun connecteur de ce type n'existe dans le code, les afficher comme
+    # une "source" serait mentir sur ce qui alimente réellement le score.
     sources = [
-        {"label": label, "disponible": _document_fourni(demande, kw)}
+        {"label": label, "disponible": _document_ocr_analyse(demande, kw)}
         for label, kw in DOC_KEYWORDS.items()
     ]
-    sources.append({"label": "Consultation centrale des risques BCEAO", "disponible": False})
-    sources.append({"label": "Open Banking", "disponible": False})
 
     return {
         "total": total,
