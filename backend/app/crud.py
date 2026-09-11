@@ -1,6 +1,6 @@
 import calendar
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlmodel import Session, col, func, select
@@ -18,6 +18,9 @@ from app.models import (
     Document,
     DocumentCreate,
     Echeance,
+    InvestisseurConversationPublic,
+    InvestisseurMessage,
+    InvestisseurMessageCreate,
     Marque,
     MarqueCreate,
     MarqueUpdate,
@@ -602,3 +605,117 @@ def count_unread_messages(
         .where(ChatMessage.demande_id == demande_id, field == False)  # noqa: E712
     )
     return session.exec(statement).one()
+
+
+# ---------------------------------------------------------------------------
+# Messagerie temps réel investisseurs (admin <-> investisseur)
+# ---------------------------------------------------------------------------
+
+
+def create_investisseur_message(
+    *,
+    session: Session,
+    investisseur_id: uuid.UUID,
+    sender: User,
+    is_admin_sender: bool,
+    message_in: InvestisseurMessageCreate,
+) -> InvestisseurMessage:
+    message = InvestisseurMessage(
+        investisseur_id=investisseur_id,
+        sender_id=sender.id,
+        sender_role="admin" if is_admin_sender else "investisseur",
+        contenu=message_in.contenu,
+        lu_par_admin=is_admin_sender,
+        lu_par_investisseur=not is_admin_sender,
+    )
+    session.add(message)
+    session.commit()
+    session.refresh(message)
+    return message
+
+
+def get_investisseur_messages(
+    *, session: Session, investisseur_id: uuid.UUID
+) -> tuple[list[InvestisseurMessage], int]:
+    statement = (
+        select(InvestisseurMessage)
+        .where(InvestisseurMessage.investisseur_id == investisseur_id)
+        .order_by(col(InvestisseurMessage.created_at))
+    )
+    messages = session.exec(statement).all()
+    count = session.exec(
+        select(func.count())
+        .select_from(InvestisseurMessage)
+        .where(InvestisseurMessage.investisseur_id == investisseur_id)
+    ).one()
+    return list(messages), count
+
+
+def mark_investisseur_messages_read(
+    *, session: Session, investisseur_id: uuid.UUID, is_admin_viewer: bool
+) -> None:
+    field = (
+        InvestisseurMessage.lu_par_admin
+        if is_admin_viewer
+        else InvestisseurMessage.lu_par_investisseur
+    )
+    statement = select(InvestisseurMessage).where(
+        InvestisseurMessage.investisseur_id == investisseur_id, field == False  # noqa: E712
+    )
+    for message in session.exec(statement).all():
+        if is_admin_viewer:
+            message.lu_par_admin = True
+        else:
+            message.lu_par_investisseur = True
+        session.add(message)
+    session.commit()
+
+
+def count_unread_investisseur_messages(
+    *, session: Session, investisseur_id: uuid.UUID, is_admin_viewer: bool
+) -> int:
+    field = (
+        InvestisseurMessage.lu_par_admin
+        if is_admin_viewer
+        else InvestisseurMessage.lu_par_investisseur
+    )
+    statement = (
+        select(func.count())
+        .select_from(InvestisseurMessage)
+        .where(InvestisseurMessage.investisseur_id == investisseur_id, field == False)  # noqa: E712
+    )
+    return session.exec(statement).one()
+
+
+def get_investisseur_conversations(
+    *, session: Session
+) -> list[InvestisseurConversationPublic]:
+    investisseurs = session.exec(
+        select(User).where(User.is_investisseur == True)  # noqa: E712
+    ).all()
+    conversations = []
+    for inv in investisseurs:
+        last = session.exec(
+            select(InvestisseurMessage)
+            .where(InvestisseurMessage.investisseur_id == inv.id)
+            .order_by(col(InvestisseurMessage.created_at).desc())
+            .limit(1)
+        ).first()
+        unread = count_unread_investisseur_messages(
+            session=session, investisseur_id=inv.id, is_admin_viewer=True
+        )
+        conversations.append(
+            InvestisseurConversationPublic(
+                investisseur_id=inv.id,
+                investisseur_name=inv.full_name or inv.email,
+                investisseur_email=inv.email,
+                last_message=last.contenu if last else None,
+                last_message_at=last.created_at if last else None,
+                unread_count=unread,
+            )
+        )
+    conversations.sort(
+        key=lambda c: c.last_message_at or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return conversations

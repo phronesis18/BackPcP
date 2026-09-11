@@ -738,6 +738,65 @@ class ChatMessagesPublic(SQLModel):
     count: int
 
 
+# ---------------------------------------------------------------------------
+# Messagerie temps réel investisseurs (admin <-> investisseur)
+# ---------------------------------------------------------------------------
+
+
+class InvestisseurMessageBase(SQLModel):
+    contenu: str = Field(max_length=2000)
+
+
+class InvestisseurMessageCreate(InvestisseurMessageBase):
+    pass
+
+
+class InvestisseurMessage(InvestisseurMessageBase, table=True):
+    __tablename__ = "investisseur_message"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    investisseur_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    sender_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    sender_role: str = Field(max_length=15)  # snapshot "investisseur" | "admin"
+    lu_par_investisseur: bool = Field(default=False)
+    lu_par_admin: bool = Field(default=False)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class InvestisseurMessagePublic(InvestisseurMessageBase):
+    id: uuid.UUID
+    investisseur_id: uuid.UUID
+    sender_id: uuid.UUID
+    sender_role: str
+    sender_name: str
+    created_at: datetime | None = None
+
+
+class InvestisseurMessagesPublic(SQLModel):
+    data: list[InvestisseurMessagePublic]
+    count: int
+
+
+class InvestisseurConversationPublic(SQLModel):
+    investisseur_id: uuid.UUID
+    investisseur_name: str
+    investisseur_email: str
+    last_message: str | None = None
+    last_message_at: datetime | None = None
+    unread_count: int = 0
+
+
+class InvestisseurConversationsPublic(SQLModel):
+    data: list[InvestisseurConversationPublic]
+
+
 # Generic message
 class Message(SQLModel):
     message: str
