@@ -739,30 +739,31 @@ class ChatMessagesPublic(SQLModel):
 
 
 # ---------------------------------------------------------------------------
-# Messagerie temps réel investisseurs (admin <-> investisseur)
+# Messagerie temps réel générique (admin <-> n'importe quel utilisateur :
+# investisseur, admin... les clients, eux, restent sur la messagerie par
+# dossier ci-dessus, à laquelle la boîte de réception unifiée ci-dessous
+# donne aussi accès).
 # ---------------------------------------------------------------------------
 
 
-class InvestisseurMessageBase(SQLModel):
+class UserMessageBase(SQLModel):
     contenu: str = Field(max_length=2000)
 
 
-class InvestisseurMessageCreate(InvestisseurMessageBase):
+class UserMessageCreate(UserMessageBase):
     pass
 
 
-class InvestisseurMessage(InvestisseurMessageBase, table=True):
-    __tablename__ = "investisseur_message"
+class UserMessage(UserMessageBase, table=True):
+    __tablename__ = "user_message"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    investisseur_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
-    )
+    user_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
     sender_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    sender_role: str = Field(max_length=15)  # snapshot "investisseur" | "admin"
-    lu_par_investisseur: bool = Field(default=False)
+    sender_role: str = Field(max_length=10)  # snapshot "user" | "admin"
+    lu_par_user: bool = Field(default=False)
     lu_par_admin: bool = Field(default=False)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -770,31 +771,40 @@ class InvestisseurMessage(InvestisseurMessageBase, table=True):
     )
 
 
-class InvestisseurMessagePublic(InvestisseurMessageBase):
+class UserMessagePublic(UserMessageBase):
     id: uuid.UUID
-    investisseur_id: uuid.UUID
+    user_id: uuid.UUID
     sender_id: uuid.UUID
     sender_role: str
     sender_name: str
     created_at: datetime | None = None
 
 
-class InvestisseurMessagesPublic(SQLModel):
-    data: list[InvestisseurMessagePublic]
+class UserMessagesPublic(SQLModel):
+    data: list[UserMessagePublic]
     count: int
 
 
-class InvestisseurConversationPublic(SQLModel):
-    investisseur_id: uuid.UUID
-    investisseur_name: str
-    investisseur_email: str
+# Ligne de la boîte de réception unifiée admin ("Messagerie") : un utilisateur,
+# quel que soit son rôle, avec la conversation qui lui correspond — celle liée
+# à son dossier de crédit pour un client, celle du canal générique ci-dessus
+# pour un investisseur ou un admin.
+class MessagerieConversationPublic(SQLModel):
+    user_id: uuid.UUID
+    user_name: str
+    user_email: str
+    is_admin: bool
+    is_investisseur: bool
+    is_superuser: bool
+    conversation_kind: str  # "demande" | "user"
+    conversation_id: uuid.UUID | None = None
     last_message: str | None = None
     last_message_at: datetime | None = None
     unread_count: int = 0
 
 
-class InvestisseurConversationsPublic(SQLModel):
-    data: list[InvestisseurConversationPublic]
+class MessagerieConversationsPublic(SQLModel):
+    data: list[MessagerieConversationPublic]
 
 
 # Generic message

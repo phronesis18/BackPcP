@@ -3,8 +3,8 @@ from fastapi import APIRouter
 from app.api.routes import (
     catalogue,
     fleet,
-    investisseur_messages,
     login,
+    messagerie,
     messages,
     parametres,
     private,
@@ -23,7 +23,7 @@ api_router.include_router(demandes.router)
 api_router.include_router(catalogue.router)
 api_router.include_router(parametres.router)
 api_router.include_router(messages.router)
-api_router.include_router(investisseur_messages.router)
+api_router.include_router(messagerie.router)
 api_router.include_router(recouvrement.router)
 api_router.include_router(recouvrement.dossiers_router)
 api_router.include_router(fleet.router)
