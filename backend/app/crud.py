@@ -15,9 +15,14 @@ from app.models import (
     ContratCreate,
     Demande,
     DemandeCreate,
+    Distribution,
+    DistributionCreate,
+    DistributionUpdate,
     Document,
     DocumentCreate,
     Echeance,
+    InvestisseurProfil,
+    InvestisseurProfilUpdate,
     Marque,
     MarqueCreate,
     MarqueUpdate,
@@ -31,6 +36,7 @@ from app.models import (
     ParametresFinanciers,
     ParametresFinanciersUpdate,
     StatutDemande,
+    StatutDistribution,
     User,
     UserCreate,
     UserMessage,
@@ -43,6 +49,7 @@ from app.models import (
     VendeurUpdate,
     get_datetime_utc,
 )
+from app.recouvrement import compute_recouvrement
 
 
 def create_user(*, session: Session, user_create: UserCreate) -> User:
@@ -756,3 +763,192 @@ def get_messagerie_conversations(
         reverse=True,
     )
     return conversations
+
+
+# ---------------------------------------------------------------------------
+# Dashboard investisseur : capital investi + distributions saisis par un
+# admin, encours/contrats/NPL/taux de remboursement/répartition calculés en
+# direct depuis l'échéancier réel — même logique que le module Recouvrement.
+# ---------------------------------------------------------------------------
+
+
+def list_investisseurs(*, session: Session) -> list[User]:
+    statement = select(User).where(User.is_investisseur == True)  # noqa: E712
+    return list(session.exec(statement).all())
+
+
+def get_investisseur_profil(
+    *, session: Session, investisseur_id: uuid.UUID
+) -> InvestisseurProfil | None:
+    statement = select(InvestisseurProfil).where(
+        InvestisseurProfil.investisseur_id == investisseur_id
+    )
+    return session.exec(statement).first()
+
+
+def upsert_investisseur_profil(
+    *, session: Session, investisseur_id: uuid.UUID, profil_in: InvestisseurProfilUpdate
+) -> InvestisseurProfil:
+    profil = get_investisseur_profil(session=session, investisseur_id=investisseur_id)
+    if not profil:
+        profil = InvestisseurProfil(investisseur_id=investisseur_id)
+    for key, value in profil_in.model_dump(exclude_unset=True).items():
+        setattr(profil, key, value)
+    session.add(profil)
+    session.commit()
+    session.refresh(profil)
+    return profil
+
+
+def create_distribution(
+    *, session: Session, investisseur_id: uuid.UUID, distribution_in: DistributionCreate
+) -> Distribution:
+    distribution = Distribution.model_validate(
+        distribution_in, update={"investisseur_id": investisseur_id}
+    )
+    session.add(distribution)
+    session.commit()
+    session.refresh(distribution)
+    return distribution
+
+
+def get_distributions(*, session: Session, investisseur_id: uuid.UUID) -> list[Distribution]:
+    statement = (
+        select(Distribution)
+        .where(Distribution.investisseur_id == investisseur_id)
+        .order_by(col(Distribution.date_distribution).desc())
+    )
+    return list(session.exec(statement).all())
+
+
+def get_distribution(*, session: Session, distribution_id: uuid.UUID) -> Distribution | None:
+    return session.get(Distribution, distribution_id)
+
+
+def update_distribution(
+    *, session: Session, distribution: Distribution, distribution_in: DistributionUpdate
+) -> Distribution:
+    for key, value in distribution_in.model_dump(exclude_unset=True).items():
+        setattr(distribution, key, value)
+    session.add(distribution)
+    session.commit()
+    session.refresh(distribution)
+    return distribution
+
+
+def delete_distribution(*, session: Session, distribution: Distribution) -> None:
+    session.delete(distribution)
+    session.commit()
+
+
+def _prochain_rapport_officiel() -> date:
+    today = date.today()
+    for month, day in ((3, 31), (6, 30), (9, 30), (12, 31)):
+        candidate = date(today.year, month, day)
+        if candidate >= today:
+            return candidate
+    return date(today.year + 1, 3, 31)
+
+
+def get_fonds_performance(*, session: Session) -> dict:
+    demandes = list_demandes_avec_echeancier(session=session)
+    today = date.today()
+    contrats_actifs = 0
+    encours_total = 0
+    en_retard_90 = 0
+    total_echeances_dues = 0
+    total_echeances_a_temps = 0
+
+    for demande in demandes:
+        echeances = get_echeances(session=session, demande_id=demande.id)
+        actions = get_actions_recouvrement(session=session, demande_id=demande.id)
+        info = compute_recouvrement(echeances, actions)
+
+        impayees = [e for e in echeances if not e.payee]
+        if impayees:
+            contrats_actifs += 1
+            encours_total += sum(e.montant for e in impayees)
+        if info["jours_retard"] >= 90:
+            en_retard_90 += 1
+
+        for e in echeances:
+            if e.date_echeance <= today:
+                total_echeances_dues += 1
+                if e.payee and e.payee_le and e.payee_le.date() <= e.date_echeance:
+                    total_echeances_a_temps += 1
+
+    npl_90j_pct = round(en_retard_90 / contrats_actifs * 100, 1) if contrats_actifs else 0.0
+    taux_remboursement_pct = (
+        round(total_echeances_a_temps / total_echeances_dues * 100, 1)
+        if total_echeances_dues
+        else 0.0
+    )
+    return {
+        "encours_total": encours_total,
+        "contrats_actifs": contrats_actifs,
+        "npl_90j_pct": npl_90j_pct,
+        "taux_remboursement_pct": taux_remboursement_pct,
+        "lgd_note": "Aucun défaut à ce stade" if en_retard_90 == 0 else "En cours d'évaluation",
+        "ratio_charges_ca": None,
+        "prochain_rapport_officiel": _prochain_rapport_officiel(),
+    }
+
+
+def get_repartition_marques(*, session: Session) -> list[dict]:
+    demandes = list_demandes_avec_echeancier(session=session)
+    counts: dict[str, int] = {}
+    for demande in demandes:
+        label = demande.marque or "Autres"
+        counts[label] = counts.get(label, 0) + 1
+    return [
+        {"marque": marque, "count": count}
+        for marque, count in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+
+def get_investisseur_dashboard(*, session: Session, investisseur_id: uuid.UUID) -> dict:
+    profil = get_investisseur_profil(session=session, investisseur_id=investisseur_id)
+    montant_investi = profil.montant_investi if profil else 0
+    date_investissement = profil.date_investissement if profil else None
+
+    distributions = get_distributions(session=session, investisseur_id=investisseur_id)
+    dividendes_recus = sum(
+        d.montant for d in distributions if d.statut == StatutDistribution.verse
+    )
+
+    current_year = date.today().year
+    dividendes_ytd = sum(
+        d.montant
+        for d in distributions
+        if d.statut == StatutDistribution.verse and d.date_distribution.year == current_year
+    )
+    rendement_ytd_pct = (
+        round(dividendes_ytd / montant_investi * 100, 1) if montant_investi else None
+    )
+
+    tri_calcule_pct = None
+    if montant_investi and date_investissement:
+        years_elapsed = max((date.today() - date_investissement).days / 365.25, 0.5)
+        tri_calcule_pct = round(dividendes_recus / montant_investi / years_elapsed * 100, 1)
+
+    prochain_versement = next(
+        (
+            d
+            for d in sorted(distributions, key=lambda d: d.date_distribution)
+            if d.statut == StatutDistribution.prevu
+        ),
+        None,
+    )
+
+    return {
+        "investisseur_id": investisseur_id,
+        "montant_investi": montant_investi,
+        "date_investissement": date_investissement,
+        "dividendes_recus": dividendes_recus,
+        "rendement_ytd_pct": rendement_ytd_pct,
+        "tri_calcule_pct": tri_calcule_pct,
+        "prochain_versement": prochain_versement,
+        "distributions": distributions,
+        "repartition_marques": get_repartition_marques(session=session),
+        "fonds": get_fonds_performance(session=session),
+    }

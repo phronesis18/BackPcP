@@ -807,6 +807,127 @@ class MessagerieConversationsPublic(SQLModel):
     data: list[MessagerieConversationPublic]
 
 
+# ---------------------------------------------------------------------------
+# Dashboard investisseur — capital investi et distributions saisis par un
+# admin (aucun connecteur bancaire réel), le reste (encours, contrats actifs,
+# NPL, taux de remboursement, répartition par marque) est calculé en direct
+# depuis l'échéancier réel des dossiers de crédit, comme le module Recouvrement.
+# ---------------------------------------------------------------------------
+
+
+class StatutDistribution(str, enum.Enum):
+    prevu = "prevu"
+    verse = "verse"
+
+
+class InvestisseurProfilBase(SQLModel):
+    montant_investi: int = Field(default=0)
+    date_investissement: date | None = Field(default=None, sa_type=Date)  # type: ignore
+
+
+class InvestisseurProfilUpdate(SQLModel):
+    montant_investi: int | None = None
+    date_investissement: date | None = None
+
+
+class InvestisseurProfil(InvestisseurProfilBase, table=True):
+    __tablename__ = "investisseur_profil"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    investisseur_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, unique=True, ondelete="CASCADE"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class InvestisseurProfilPublic(InvestisseurProfilBase):
+    investisseur_id: uuid.UUID
+
+
+class DistributionBase(SQLModel):
+    date_distribution: date = Field(sa_type=Date)  # type: ignore
+    montant: int
+    statut: StatutDistribution = Field(default=StatutDistribution.prevu)
+
+
+class DistributionCreate(DistributionBase):
+    pass
+
+
+class DistributionUpdate(SQLModel):
+    date_distribution: date | None = None
+    montant: int | None = None
+    statut: StatutDistribution | None = None
+
+
+class Distribution(DistributionBase, table=True):
+    __tablename__ = "investisseur_distribution"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    investisseur_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class DistributionPublic(DistributionBase):
+    id: uuid.UUID
+    investisseur_id: uuid.UUID
+
+
+class DistributionsPublic(SQLModel):
+    data: list[DistributionPublic]
+    count: int
+
+
+class RepartitionMarquePublic(SQLModel):
+    marque: str
+    count: int
+
+
+class FondsPerformancePublic(SQLModel):
+    encours_total: int
+    contrats_actifs: int
+    npl_90j_pct: float
+    taux_remboursement_pct: float
+    lgd_note: str
+    ratio_charges_ca: float | None = None
+    prochain_rapport_officiel: date
+
+
+class InvestisseurDashboardPublic(SQLModel):
+    investisseur_id: uuid.UUID
+    montant_investi: int
+    date_investissement: date | None = None
+    dividendes_recus: int
+    rendement_ytd_pct: float | None = None
+    tri_calcule_pct: float | None = None
+    prochain_versement: DistributionPublic | None = None
+    distributions: list[DistributionPublic]
+    repartition_marques: list[RepartitionMarquePublic]
+    fonds: FondsPerformancePublic
+
+
+class InvestisseurAdminRowPublic(SQLModel):
+    investisseur_id: uuid.UUID
+    nom: str
+    email: str
+    montant_investi: int
+    date_investissement: date | None = None
+    dividendes_recus: int
+    prochain_versement: DistributionPublic | None = None
+
+
+class InvestisseursAdminPublic(SQLModel):
+    data: list[InvestisseurAdminRowPublic]
+
+
 # Generic message
 class Message(SQLModel):
     message: str
