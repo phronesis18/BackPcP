@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -6,6 +7,7 @@ from fastapi.responses import Response
 from sqlmodel import Session
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.config import settings
 from app.crud import (
     count_unread_messages,
     create_contrat,
@@ -35,8 +37,19 @@ from app.models import (
 )
 from app.ocr import OcrError, analyser_document
 from app.scoring import compute_score
+from app.utils import generate_demande_statut_email, logger, send_email
 
 router = APIRouter(prefix="/demandes", tags=["demandes"])
+
+
+def _dossier_ref(demande: Demande) -> str:
+    year = demande.created_at.year if demande.created_at else datetime.now().year
+    return f"PCP-{year}-{str(demande.id)[:4].upper()}"
+
+
+def _vehicule_label(demande: Demande) -> str:
+    parts = [demande.marque, demande.modele, str(demande.annee) if demande.annee else None]
+    return " ".join(p for p in parts if p) or "—"
 
 
 def to_demande_public(session: Session, demande: Demande, viewer: User) -> DemandePublic:
@@ -263,11 +276,37 @@ def update_demande(
     ):
         raise HTTPException(status_code=403, detail="Accès non autorisé")
 
+    ancien_statut = demande.statut
     update_dict = demande_in.model_dump(exclude_unset=True)
     demande.sqlmodel_update(update_dict)
     session.add(demande)
     session.commit()
     session.refresh(demande)
+
+    if demande_in.statut is not None and demande.statut != ancien_statut and settings.emails_enabled:
+        owner = session.get(User, demande.owner_id)
+        if owner and owner.email:
+            email_data = generate_demande_statut_email(
+                email_to=owner.email,
+                client_prenom=demande.prenom,
+                dossier_ref=_dossier_ref(demande),
+                vehicule_label=_vehicule_label(demande),
+                statut=demande.statut,
+            )
+            if email_data:
+                try:
+                    send_email(
+                        email_to=owner.email,
+                        subject=email_data.subject,
+                        html_content=email_data.html_content,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Échec de l'envoi de l'email de statut à %s pour la demande %s",
+                        owner.email,
+                        demande.id,
+                    )
+
     return to_demande_public(session, demande, current_user)
 
 
