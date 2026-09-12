@@ -77,7 +77,7 @@ def create_user(*, session: SessionDep, current_user: CurrentUser, user_in: User
             detail="The user with this email already exists in the system.",
         )
 
-    user = crud.create_user(session=session, user_create=user_in)
+    user = crud.create_user(session=session, user_create=user_in, must_change_password=True)
     if settings.emails_enabled and user_in.email:
         email_data = generate_new_account_email(
             email_to=user_in.email, username=user_in.email, password=user_in.password
@@ -136,6 +136,7 @@ def update_password_me(
         )
     hashed_password = get_password_hash(body.new_password)
     current_user.hashed_password = hashed_password
+    current_user.must_change_password = False
     session.add(current_user)
     session.commit()
     return Message(message="Password updated successfully")

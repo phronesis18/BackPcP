@@ -52,9 +52,15 @@ from app.models import (
 from app.recouvrement import compute_recouvrement
 
 
-def create_user(*, session: Session, user_create: UserCreate) -> User:
+def create_user(
+    *, session: Session, user_create: UserCreate, must_change_password: bool = False
+) -> User:
     db_obj = User.model_validate(
-        user_create, update={"hashed_password": get_password_hash(user_create.password)}
+        user_create,
+        update={
+            "hashed_password": get_password_hash(user_create.password),
+            "must_change_password": must_change_password,
+        },
     )
     session.add(db_obj)
     session.commit()
