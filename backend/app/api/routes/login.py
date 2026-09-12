@@ -13,6 +13,7 @@ from app.models import Message, NewPassword, Token, UserPublic, UserUpdate
 from app.utils import (
     generate_password_reset_token,
     generate_reset_password_email,
+    logger,
     send_email,
     verify_password_reset_token,
 )
@@ -64,11 +65,16 @@ def recover_password(email: str, session: SessionDep) -> Message:
         email_data = generate_reset_password_email(
             email_to=user.email, email=email, token=password_reset_token
         )
-        send_email(
-            email_to=user.email,
-            subject=email_data.subject,
-            html_content=email_data.html_content,
-        )
+        try:
+            send_email(
+                email_to=user.email,
+                subject=email_data.subject,
+                html_content=email_data.html_content,
+            )
+        except Exception:
+            # Le message de réponse reste générique quoi qu'il arrive (pas
+            # d'énumération d'emails) — on garde juste une trace de l'échec.
+            logger.exception("Échec de l'envoi de l'email de récupération à %s", user.email)
     return Message(
         message="If that email is registered, we sent a password recovery link"
     )

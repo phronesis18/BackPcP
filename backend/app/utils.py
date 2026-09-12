@@ -52,6 +52,10 @@ def send_email(
     if settings.SMTP_PASSWORD:
         smtp_options["password"] = settings.SMTP_PASSWORD
     response = message.send(to=email_to, smtp=smtp_options)
+    # `emails` never raises on its own for a connection/auth failure — it just
+    # returns a response with status_code=None, so a down SMTP server would
+    # otherwise look identical to a successful send. Surface it explicitly.
+    response.raise_if_needed()
     logger.info(f"send email result: {response}")
 
 

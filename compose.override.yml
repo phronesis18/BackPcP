@@ -80,12 +80,9 @@ services:
     # TODO: remove once coverage is done locally
     volumes:
       - ./backend/htmlcov:/app/backend/htmlcov
-    environment:
-      SMTP_HOST: "mailcatcher"
-      SMTP_PORT: "1025"
-      SMTP_TLS: "false"
-      EMAILS_FROM_EMAIL: "noreply@example.com"
 
+  # Plus utilisé pour l'envoi de mail (SMTP réel configuré via .env) — laissé
+  # ici au cas où un test hors-ligne serait utile, mais rien ne pointe dessus.
   mailcatcher:
     image: schickling/mailcatcher
     ports:
