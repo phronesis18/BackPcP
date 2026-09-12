@@ -25,18 +25,27 @@ depends_on = None
 
 
 def upgrade():
-    op.alter_column(
-        "contrat", "plate", existing_type=sa.String(length=20), nullable=True
-    )
-    op.alter_column(
-        "contrat", "gps_device_id", existing_type=sa.String(length=50), nullable=True
-    )
+    # Fresh databases built purely from this migration history never had
+    # these columns in the first place (only environments with the manual
+    # schema drift described above do) — skip instead of failing on them.
+    columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("contrat")}
+    if "plate" in columns:
+        op.alter_column(
+            "contrat", "plate", existing_type=sa.String(length=20), nullable=True
+        )
+    if "gps_device_id" in columns:
+        op.alter_column(
+            "contrat", "gps_device_id", existing_type=sa.String(length=50), nullable=True
+        )
 
 
 def downgrade():
-    op.alter_column(
-        "contrat", "gps_device_id", existing_type=sa.String(length=50), nullable=False
-    )
-    op.alter_column(
-        "contrat", "plate", existing_type=sa.String(length=20), nullable=False
-    )
+    columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("contrat")}
+    if "gps_device_id" in columns:
+        op.alter_column(
+            "contrat", "gps_device_id", existing_type=sa.String(length=50), nullable=False
+        )
+    if "plate" in columns:
+        op.alter_column(
+            "contrat", "plate", existing_type=sa.String(length=20), nullable=False
+        )
