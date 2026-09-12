@@ -23,7 +23,7 @@ from app.models import (
     UserUpdate,
     UserUpdateMe,
 )
-from app.utils import generate_new_account_email, send_email
+from app.utils import generate_new_account_email, logger, send_email
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -77,16 +77,24 @@ def create_user(*, session: SessionDep, current_user: CurrentUser, user_in: User
             detail="The user with this email already exists in the system.",
         )
 
-    user = crud.create_user(session=session, user_create=user_in)
+    user = crud.create_user(session=session, user_create=user_in, must_change_password=True)
     if settings.emails_enabled and user_in.email:
         email_data = generate_new_account_email(
             email_to=user_in.email, username=user_in.email, password=user_in.password
         )
-        send_email(
-            email_to=user_in.email,
-            subject=email_data.subject,
-            html_content=email_data.html_content,
-        )
+        try:
+            send_email(
+                email_to=user_in.email,
+                subject=email_data.subject,
+                html_content=email_data.html_content,
+            )
+        except Exception:
+            # Le compte est déjà créé à ce stade — un SMTP en panne ne doit
+            # pas faire échouer la création, seulement priver l'admin de la
+            # confirmation ; il peut toujours communiquer le mot de passe autrement.
+            logger.exception(
+                "Échec de l'envoi de l'email d'identifiants à %s", user_in.email
+            )
     return user
 
 
@@ -128,6 +136,7 @@ def update_password_me(
         )
     hashed_password = get_password_hash(body.new_password)
     current_user.hashed_password = hashed_password
+    current_user.must_change_password = False
     session.add(current_user)
     session.commit()
     return Message(message="Password updated successfully")

@@ -79,6 +79,10 @@ class UpdatePassword(SQLModel):
 class User(UserBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     hashed_password: str
+    # True for accounts an admin creates on someone's behalf (they log in with
+    # the temporary password emailed to them and must pick their own before
+    # doing anything else) — always False for self-registration.
+    must_change_password: bool = Field(default=False)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),  # type: ignore
@@ -92,6 +96,7 @@ class User(UserBase, table=True):
 class UserPublic(UserBase):
     id: uuid.UUID
     created_at: datetime | None = None
+    must_change_password: bool = False
 
 
 class UsersPublic(SQLModel):
