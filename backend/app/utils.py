@@ -113,7 +113,7 @@ _DEMANDE_STATUT_CONTENT: dict[StatutDemande, dict[str, str]] = {
         "label": "Dossier validé",
         "color": "#16a34a",
         "message": (
-            "Bonne nouvelle {prenom} ! Après étude, votre dossier de financement pour "
+            "Bonne nouvelle {prenom} ! Après étude, votre dossier de financement pour votre vehicule; "
             "{vehicule} a été validé. Il ne reste qu'une étape : connectez-vous à votre "
             "espace client pour signer électroniquement votre contrat et démarrer votre "
             "financement."
