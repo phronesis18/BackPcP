@@ -21,6 +21,8 @@ from app.models import (
     Document,
     DocumentCreate,
     Echeance,
+    GrilleTauxDuree,
+    GrilleTauxDureeUpsert,
     InvestisseurProfil,
     InvestisseurProfilUpdate,
     Marque,
@@ -548,6 +550,42 @@ def update_parametres_financiers(
     session.commit()
     session.refresh(db_parametres)
     return db_parametres
+
+
+def get_grille_taux(*, session: Session) -> list[GrilleTauxDuree]:
+    return list(
+        session.exec(select(GrilleTauxDuree).order_by(col(GrilleTauxDuree.duree_mois))).all()
+    )
+
+
+def get_taux_pour_duree(*, session: Session, duree_mois: int) -> GrilleTauxDuree | None:
+    return session.exec(
+        select(GrilleTauxDuree).where(GrilleTauxDuree.duree_mois == duree_mois)
+    ).first()
+
+
+def upsert_grille_taux(
+    *, session: Session, items: list[GrilleTauxDureeUpsert]
+) -> list[GrilleTauxDuree]:
+    now = get_datetime_utc()
+    for item in items:
+        db_row = session.exec(
+            select(GrilleTauxDuree).where(GrilleTauxDuree.duree_mois == item.duree_mois)
+        ).first()
+        if db_row:
+            db_row.taux_teg_annuel = item.taux_teg_annuel
+            db_row.taux_apport_min = item.taux_apport_min
+            db_row.updated_at = now
+        else:
+            db_row = GrilleTauxDuree(
+                duree_mois=item.duree_mois,
+                taux_teg_annuel=item.taux_teg_annuel,
+                taux_apport_min=item.taux_apport_min,
+                updated_at=now,
+            )
+        session.add(db_row)
+    session.commit()
+    return get_grille_taux(session=session)
 
 
 # ---------------------------------------------------------------------------

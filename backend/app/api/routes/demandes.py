@@ -17,6 +17,7 @@ from app.crud import (
     get_demande,
     get_demandes,
     get_or_create_parametres_financiers,
+    get_taux_pour_duree,
     set_document_ocr_resultat,
 )
 from app.models import (
@@ -122,7 +123,13 @@ def create_demande_route(
     """
     if demande_in.statut != StatutDemande.brouillon:
         parametres = get_or_create_parametres_financiers(session=session)
-        montant_finance = demande_in.prix_vehicule * (1 - parametres.taux_apport)
+        taux = get_taux_pour_duree(session=session, duree_mois=demande_in.duree_mois)
+        if not taux:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Durée {demande_in.duree_mois} mois non couverte par la grille de taux.",
+            )
+        montant_finance = demande_in.prix_vehicule * (1 - taux.taux_apport_min)
         if montant_finance < parametres.montant_min or montant_finance > parametres.montant_max:
             raise HTTPException(
                 status_code=422,
