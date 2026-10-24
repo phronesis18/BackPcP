@@ -1,0 +1,40 @@
+# Met en production une version déjà construite par le workflow "Release".
+# Actions → Deploy → Run workflow → saisir le tag (ex : v1.2.0).
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version à mettre en production (ex : v1.2.0)"
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://api.phronesiscapital-partners.com/docs
+    steps:
+      - name: Déployer sur le serveur
+        env:
+          TAG: ${{ inputs.tag }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # La clé ne peut lancer que /opt/pcp/deploy.sh ; le jeton ghcr.io passe sur stdin
+          printf '%s' "$GHCR_TOKEN" | ssh -o BatchMode=yes "root@$DEPLOY_HOST" "backend $TAG"

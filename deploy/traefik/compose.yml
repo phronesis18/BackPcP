@@ -1,0 +1,39 @@
+# Reverse proxy partagé par tous les projets du serveur (PCP, Atlas...).
+# Seul ce conteneur publie les ports 80 et 443 ; les applications s'y branchent
+# via le réseau Docker "traefik-public" et des labels traefik.*.
+#
+# Sur le serveur : /opt/traefik/compose.yml + /opt/traefik/.env (ACME_EMAIL=...)
+name: traefik
+
+services:
+  traefik:
+    image: traefik:3.6
+    restart: always
+    ports:
+      - 80:80
+      - 443:443
+    command:
+      - --providers.docker
+      # Seuls les conteneurs avec le label traefik.enable=true sont exposés
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik-public
+      - --entrypoints.http.address=:80
+      - --entrypoints.https.address=:443
+      # Certificats HTTPS Let's Encrypt
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?ACME_EMAIL manquant dans .env}
+      - --certificatesresolvers.le.acme.storage=/certificates/acme.json
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --log.level=INFO
+      - --accesslog
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - certificates:/certificates
+    networks:
+      - traefik-public
+
+volumes:
+  certificates:
+
+networks:
+  traefik-public:
+    external: true

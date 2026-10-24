@@ -1,0 +1,94 @@
+# Stack de production PCP (base, API, frontend), derrière le Traefik partagé.
+# Les images sont construites par GitHub Actions à chaque tag et publiées sur ghcr.io.
+#
+# Sur le serveur : /opt/pcp/compose.yml
+#   .env          -> secrets de production (jamais dans git)
+#   versions.env  -> BACKEND_TAG / FRONTEND_TAG actuellement déployés (géré par deploy.sh)
+name: pcp
+
+x-backend: &backend
+  image: ghcr.io/phronesis18/backpcp:${BACKEND_TAG:-none}
+  env_file:
+    - .env
+  environment:
+    - POSTGRES_SERVER=db
+  depends_on:
+    db:
+      condition: service_healthy
+      restart: true
+
+services:
+  db:
+    image: postgres:18
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+    volumes:
+      - db-data:/var/lib/postgresql/data/pgdata
+    environment:
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Variable not set}
+      - POSTGRES_USER=${POSTGRES_USER:?Variable not set}
+      - POSTGRES_DB=${POSTGRES_DB:?Variable not set}
+
+  # Migrations Alembic + données initiales, exécuté avant chaque démarrage du backend
+  prestart:
+    <<: *backend
+    command: bash scripts/prestart.sh
+
+  backend:
+    <<: *backend
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      prestart:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.pcp-backend.loadbalancer.server.port=8000
+      - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
+      - traefik.http.middlewares.https-redirect.redirectscheme.permanent=true
+      - traefik.http.routers.pcp-backend-http.rule=Host(`api.${DOMAIN:?Variable not set}`)
+      - traefik.http.routers.pcp-backend-http.entrypoints=http
+      - traefik.http.routers.pcp-backend-http.middlewares=https-redirect
+      - traefik.http.routers.pcp-backend-https.rule=Host(`api.${DOMAIN}`)
+      - traefik.http.routers.pcp-backend-https.entrypoints=https
+      - traefik.http.routers.pcp-backend-https.tls.certresolver=le
+
+  frontend:
+    image: ghcr.io/phronesis18/frontpcp:${FRONTEND_TAG:-none}
+    restart: always
+    networks:
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.pcp-frontend.loadbalancer.server.port=3000
+      - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
+      - traefik.http.middlewares.https-redirect.redirectscheme.permanent=true
+      - traefik.http.routers.pcp-frontend-http.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)
+      - traefik.http.routers.pcp-frontend-http.entrypoints=http
+      - traefik.http.routers.pcp-frontend-http.middlewares=https-redirect
+      - traefik.http.routers.pcp-frontend-https.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)
+      - traefik.http.routers.pcp-frontend-https.entrypoints=https
+      - traefik.http.routers.pcp-frontend-https.tls.certresolver=le
+
+volumes:
+  db-data:
+
+networks:
+  traefik-public:
+    external: true

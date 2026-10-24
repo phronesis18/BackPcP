@@ -1,0 +1,24 @@
+# Override serveur de Phronesis Atlas (/home/phronesiss/Phronesis_Atlas/docker-compose.override.yml).
+# Le frontend n'occupe plus le port 80 lui-même : il passe par le Traefik partagé,
+# qui lui envoie tout le trafic HTTP qui n'est pas destiné à un autre site (accès par IP).
+services:
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+  atlas-frontend:
+    networks:
+      - atlas-network
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.atlas-frontend.loadbalancer.server.port=80
+      - traefik.http.routers.atlas-frontend.rule=PathPrefix(`/`)
+      - traefik.http.routers.atlas-frontend.entrypoints=http
+      # Priorité minimale : les domaines PCP passent avant ce routeur "attrape-tout"
+      - traefik.http.routers.atlas-frontend.priority=1
+  atlas-boc-scheduler:
+    healthcheck:
+      disable: true
+
+networks:
+  traefik-public:
+    external: true
