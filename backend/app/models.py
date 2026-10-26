@@ -332,8 +332,6 @@ class VendeursPublic(SQLModel):
 
 
 class ParametresFinanciersBase(SQLModel):
-    taux_teg_annuel: float = Field(default=22.0)
-    taux_apport: float = Field(default=0.25)
     # Pourcentage (0-100) du score disponible à partir duquel un dossier est
     # approuvé automatiquement. Un pourcentage plutôt qu'un score absolu : le
     # max réellement atteignable évolue (400/850 aujourd'hui tant que Mobile
@@ -346,8 +344,6 @@ class ParametresFinanciersBase(SQLModel):
 
 
 class ParametresFinanciersUpdate(SQLModel):
-    taux_teg_annuel: float | None = None
-    taux_apport: float | None = None
     seuil_scoring_auto: int | None = None
     montant_min: int | None = None
     montant_max: int | None = None
@@ -362,6 +358,37 @@ class ParametresFinanciers(ParametresFinanciersBase, table=True):
 
 
 class ParametresFinanciersPublic(ParametresFinanciersBase):
+    id: uuid.UUID
+    updated_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Grille des taux par durée — le TEG et l'apport minimum requis dépendent de
+# la durée choisie par le client (politique de crédit PCP), et non plus d'un
+# taux unique appliqué à toutes les durées.
+# ---------------------------------------------------------------------------
+
+
+class GrilleTauxDureeBase(SQLModel):
+    duree_mois: int
+    taux_teg_annuel: float
+    taux_apport_min: float
+
+
+class GrilleTauxDureeUpsert(GrilleTauxDureeBase):
+    pass
+
+
+class GrilleTauxDuree(GrilleTauxDureeBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    duree_mois: int = Field(unique=True, index=True)
+    updated_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class GrilleTauxDureePublic(GrilleTauxDureeBase):
     id: uuid.UUID
     updated_at: datetime | None = None
 
